@@ -1,0 +1,460 @@
+---
+title: Tunneling modes
+description: Understand the difference between point-to-point and client-server tunneling modes in OpenVPN
+---
+
+OpenVPN supports two primary operational modes that determine how tunnels are established and managed. Understanding these modes is essential for configuring OpenVPN correctly for your use case.
+
+## Operational modes overview
+
+OpenVPN can operate in two distinct modes defined in `src/openvpn/openvpn.c:303`:
+
+```c
+/* run tunnel depending on mode */
+switch (c.options.mode)
+{
+    case MODE_POINT_TO_POINT:
+        tunnel_point_to_point(&c);
+        break;
+
+    case MODE_SERVER:
+        tunnel_server(&c);
+        break;
+
+    default:
+        ASSERT(0);
+}
+```
+
+Each mode uses a different event loop implementation optimized for its specific use case.
+
+## Point-to-point mode
+
+Point-to-point (P2P) mode creates a single tunnel between two peers. This is the simpler of the two modes and is ideal for connecting two specific endpoints.
+
+### Characteristics
+
+<Tabs>
+  <Tab title="Use cases">
+    **Best suited for:**
+    - Site-to-site VPN connections
+    - Simple two-endpoint tunnels
+    - Scenarios where the tunnel should not interfere with overall routing
+    - "Dumb" tunnel behavior similar to GRE
+    
+    <Info>
+    P2P mode is useful when you want the OpenVPN tunnel to behave more like a traditional point-to-point link without complex routing interactions.
+    </Info>
+  </Tab>
+  
+  <Tab title="Configuration">
+    **Configuration options:**
+    - No `--mode server` directive
+    - Pre-shared static keys or TLS certificates
+    - Can use `--secret` for static key mode
+    - Explicit IP addressing with `--ifconfig`
+    
+    ```bash
+    # Example P2P configuration
+    dev tun
+    ifconfig 10.8.0.1 10.8.0.2
+    secret static.key
+    ```
+  </Tab>
+  
+  <Tab title="Implementation">
+    **Event loop implementation:**
+    
+    From `src/openvpn/openvpn.c:57`:
+    
+    ```c
+    static void
+    tunnel_point_to_point(struct context *c)
+    {
+        context_clear_2(c);
+    
+        /* set point-to-point mode */
+        c->mode = CM_P2P;
+        
+        /* initialize tunnel instance */
+        init_instance_handle_signals(c, c->es, 
+            stdin_config ? 0 : CC_HARD_USR1_TO_HUP);
+        
+        /* main event loop */
+        while (true)
+        {
+            /* process timers, TLS, etc. */
+            pre_select(c);
+            P2P_CHECK_SIG();
+    
+            /* set up and do the I/O wait */
+            io_wait(c, p2p_iow_flags(c));
+            P2P_CHECK_SIG();
+    
+            /* timeout? */
+            if (c->c2.event_set_status == ES_TIMEOUT)
+            {
+                continue;
+            }
+    
+            /* process the I/O which triggered select */
+            process_io(c, c->c2.link_sockets[0]);
+            P2P_CHECK_SIG();
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### P2P mode with TLS
+
+When using TLS in P2P mode, both peers perform mutual authentication:
+
+- Each peer verifies the other's certificate
+- Session keys are derived using the TLS handshake
+- Renegotiation can occur based on time or traffic limits
+- No central authority managing the connection
+
+<Note>
+In TLS P2P mode, both peers are essentially equal - there's no inherent client/server relationship at the OpenVPN protocol level, though the TLS handshake still has a client and server role.
+</Note>
+
+### P2P mode with static keys
+
+Static key mode is the simplest OpenVPN configuration:
+
+- Single pre-shared secret key file
+- No TLS handshake overhead
+- No perfect forward secrecy
+- Includes timestamp for replay protection
+
+<Warning>
+Static key mode does not provide perfect forward secrecy. If the key is compromised, all past and future traffic can be decrypted. Use TLS mode for better security.
+</Warning>
+
+### P2P mode with DCO
+
+Data Channel Offload is available in P2P mode with some requirements:
+
+<Info>
+DCO requires DATA_V2 format, which is available for P2P mode only in OpenVPN 2.6 and later.
+</Info>
+
+From `README.dco.md:66`:
+
+```
+DCO is also available when running OpenVPN in P2P mode without `--pull` /
+`--client` option. P2P mode is useful for scenarios when the OpenVPN tunnel
+should not interfere with overall routing and behave more like a "dumb" tunnel,
+like GRE.
+
+However, DCO requires DATA_V2 to be enabled, which is available for P2P mode
+only in OpenVPN 2.6 and later.
+```
+
+Check your logs for:
+```
+P2P mode NCP negotiation result: TLS_export=1, DATA_v2=1, 
+  peer-id 9484735, cipher=AES-256-GCM
+```
+
+Verify `DATA_v2=1` and an AEAD cipher (AES-XXX-GCM or CHACHA20POLY1305).
+
+## Client-server mode
+
+Client-server mode allows a single OpenVPN server to manage multiple client connections simultaneously. This is the most common deployment model for VPN services.
+
+### Characteristics
+
+- **Scalable**: Support for hundreds or thousands of concurrent clients
+- **Centralized**: Server controls routing, addressing, and policies
+- **Dynamic**: Clients can connect and disconnect without server restart
+- **Flexible**: Push configuration options to clients
+
+### Server responsibilities
+
+The server performs several critical functions:
+
+<Accordion title="IP address management">
+**Virtual IP assignment**
+
+- Assigns unique virtual IP addresses to each client
+- Maintains an address pool
+- Can use static assignments based on common name
+- Supports both IPv4 and IPv6
+
+```bash
+server 10.8.0.0 255.255.255.0
+topology subnet
+```
+</Accordion>
+
+<Accordion title="Configuration push">
+**Pushing options to clients**
+
+- Routes to add on the client
+- DNS server addresses
+- DHCP options
+- Custom client options
+
+```bash
+push "route 192.168.1.0 255.255.255.0"
+push "dhcp-option DNS 10.8.0.1"
+```
+</Accordion>
+
+<Accordion title="Client routing">
+**Inter-client routing**
+
+- Routes traffic between clients (client-to-client)
+- Routes traffic from clients to internal networks (iroutes)
+- Consults kernel routing tables for forwarding decisions (with DCO)
+
+From `README.dco.md:85`:
+```
+The ovpn-dco kernel module implements a more transparent approach to
+configuring routes to clients (aka "iroutes") and consults the main kernel
+routing tables for forwarding decisions.
+```
+</Accordion>
+
+### Multi-instance management
+
+The server maintains separate state for each connected client:
+
+- Separate TLS sessions per client
+- Per-client encryption keys
+- Individual statistics and accounting
+- Client-specific access controls
+
+### Topology options
+
+Server mode supports different network topologies:
+
+<Tabs>
+  <Tab title="Subnet (recommended)">
+    **Subnet topology**
+    
+    - Uses a real subnet with network and broadcast addresses
+    - Most compatible with modern systems
+    - Required for DCO mode
+    - Efficient IP address usage
+    
+    ```bash
+    topology subnet
+    server 10.8.0.0 255.255.255.0
+    ```
+    
+    <Info>
+    Topology subnet is the only supported `--topology` for servers using DCO.
+    </Info>
+  </Tab>
+  
+  <Tab title="Net30 (legacy)">
+    **Net30 topology**
+    
+    - Legacy default topology
+    - Uses /30 subnets for each client
+    - Wastes IP addresses (4 per client)
+    - Included for backward compatibility
+    
+    ```bash
+    topology net30
+    server 10.8.0.0 255.255.255.0
+    ```
+    
+    <Warning>
+    Net30 topology is not supported with DCO and is generally discouraged for new deployments.
+    </Warning>
+  </Tab>
+  
+  <Tab title="P2P">
+    **P2P topology**
+    
+    - Point-to-point style addressing in server mode
+    - Each client gets a /32 address
+    - No broadcast address
+    
+    ```bash
+    topology p2p
+    server 10.8.0.0 255.255.255.0
+    ```
+  </Tab>
+</Tabs>
+
+## Protocol differences
+
+The two modes use different packet formats and protocols:
+
+### Control channel
+
+Both modes use the same control channel protocol for:
+- TLS handshake
+- Key exchange
+- Authentication
+- Keep-alive messages
+
+The control channel is managed by functions in `src/openvpn/ssl.h`.
+
+### Data channel packets
+
+<Tabs>
+  <Tab title="P_DATA_V1">
+    **Data packet format version 1**
+    
+    Basic data packet format:
+    - 1-byte opcode with key ID
+    - HMAC (optional)
+    - Cipher IV
+    - Packet ID
+    - Encrypted payload
+    
+    From `src/openvpn/ssl.h:336`:
+    ```c
+    /**
+     * Prepend a one-byte OpenVPN data channel P_DATA_V1 opcode 
+     * to the packet.
+     *
+     * The opcode identifies the packet as a V1 data channel packet 
+     * and gives the low-permutation version of the key-id to the 
+     * recipient, so it knows which decrypt key to use.
+     */
+    void tls_prepend_opcode_v1(const struct tls_multi *multi, 
+                               struct buffer *buf);
+    ```
+  </Tab>
+  
+  <Tab title="P_DATA_V2">
+    **Data packet format version 2**
+    
+    Enhanced format for client-server mode:
+    - 1-byte opcode with key ID
+    - 3-byte peer ID
+    - HMAC (optional)
+    - Cipher IV
+    - Packet ID
+    - Encrypted payload
+    
+    From `src/openvpn/ssl.h:350`:
+    ```c
+    /**
+     * Prepend an OpenVPN data channel P_DATA_V2 header to the packet.
+     * The P_DATA_V2 header consists of a 1-byte opcode, followed by 
+     * a 3-byte peer-id.
+     *
+     * The peer-id is sent by clients to servers to help the server 
+     * determine to select the decrypt key when the client is roaming 
+     * between addresses/ports.
+     */
+    void tls_prepend_opcode_v2(const struct tls_multi *multi, 
+                               struct buffer *buf);
+    ```
+    
+    <Note>
+    The peer-id in P_DATA_V2 helps servers maintain connections when clients roam between different network addresses (e.g., switching between WiFi and cellular).
+    </Note>
+  </Tab>
+</Tabs>
+
+## Mode selection guidelines
+
+<Tabs>
+  <Tab title="Choose P2P when">
+    **Use point-to-point mode when:**
+    
+    - Connecting exactly two endpoints
+    - Building site-to-site VPNs
+    - You need maximum simplicity
+    - Static configuration is acceptable
+    - No need for dynamic routing
+    - Want minimal overhead
+  </Tab>
+  
+  <Tab title="Choose server mode when">
+    **Use client-server mode when:**
+    
+    - Supporting multiple clients
+    - Need centralized management
+    - Want dynamic IP assignment
+    - Require push configuration
+    - Need client-to-client routing
+    - Building a road warrior VPN
+    - Require scalability
+  </Tab>
+</Tabs>
+
+## Configuration examples
+
+### Basic P2P configuration
+
+<Tabs>
+  <Tab title="Peer 1">
+    ```bash
+    # peer1.conf
+    dev tun
+    ifconfig 10.8.0.1 10.8.0.2
+    secret static.key
+    remote peer2.example.com
+    port 1194
+    proto udp
+    ```
+  </Tab>
+  
+  <Tab title="Peer 2">
+    ```bash
+    # peer2.conf
+    dev tun
+    ifconfig 10.8.0.2 10.8.0.1
+    secret static.key
+    remote peer1.example.com
+    port 1194
+    proto udp
+    ```
+  </Tab>
+</Tabs>
+
+### Basic client-server configuration
+
+<Tabs>
+  <Tab title="Server">
+    ```bash
+    # server.conf
+    mode server
+    dev tun
+    server 10.8.0.0 255.255.255.0
+    topology subnet
+    
+    ca ca.crt
+    cert server.crt
+    key server.key
+    dh dh2048.pem
+    
+    push "route 192.168.1.0 255.255.255.0"
+    push "dhcp-option DNS 10.8.0.1"
+    
+    keepalive 10 120
+    cipher AES-256-GCM
+    ```
+  </Tab>
+  
+  <Tab title="Client">
+    ```bash
+    # client.conf
+    client
+    dev tun
+    remote vpn.example.com
+    
+    ca ca.crt
+    cert client.crt
+    key client.key
+    
+    cipher AES-256-GCM
+    ```
+  </Tab>
+</Tabs>
+
+## Related documentation
+
+- [Architecture](/concepts/architecture) - OpenVPN architecture overview
+- [Authentication](/concepts/authentication) - Authentication methods and mechanisms
+- [Encryption](/concepts/encryption) - Encryption and cipher information

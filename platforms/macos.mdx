@@ -1,0 +1,319 @@
+---
+title: macOS
+description: macOS-specific installation and setup information for OpenVPN
+---
+
+OpenVPN is fully supported on macOS with native TUN/TAP support and modern DNS integration capabilities.
+
+## Platform status
+
+macOS is a **Tier 1 platform** - actively tested for every source commit across multiple macOS versions.
+
+## TUN/TAP driver
+
+macOS includes built-in support for TUN/TAP devices. However, third-party kernel extensions may be required depending on your macOS version and OpenVPN implementation.
+
+<Info>
+Most macOS OpenVPN clients (such as Tunnelblick) include the necessary drivers and handle installation automatically.
+</Info>
+
+## Installation
+
+<Tabs>
+  <Tab title="Homebrew">
+    Install OpenVPN using Homebrew:
+
+    ```bash
+    brew install openvpn
+    ```
+
+    This installs the OpenVPN command-line client. For GUI applications, consider Tunnelblick or OpenVPN Connect.
+  </Tab>
+  
+  <Tab title="From source">
+    Build OpenVPN from source:
+
+    ```bash
+    ./configure && make && sudo make install
+    ```
+
+    For builds from the git repository:
+    ```bash
+    autoreconf -i -v -f
+    ./configure
+    make
+    sudo make install
+    ```
+  </Tab>
+  
+  <Tab title="GUI clients">
+    **Tunnelblick** (Open Source):
+    - Download from https://tunnelblick.net/
+    - Includes TUN/TAP drivers
+    - Full GUI management
+
+    **OpenVPN Connect** (Official):
+    - Download from https://openvpn.net/client/
+    - Official OpenVPN client
+    - Modern interface
+  </Tab>
+</Tabs>
+
+## System requirements
+
+- **macOS version**: 10.12 (Sierra) or newer recommended
+- **OpenSSL 1.1.0+** or **mbed TLS 3.2.1+**: For encryption
+- **TUN/TAP drivers**: Usually included with GUI clients
+
+### Optional dependencies
+
+- **LZO**: For compression support
+- **LZ4**: For LZ4 compression
+
+## DNS configuration
+
+OpenVPN 2.7+ includes a platform-specific `--dns-updown` script that properly handles DNS configuration on macOS.
+
+### DNS integration features
+
+- Native integration with macOS DNS resolution
+- Split-DNS support for accessing both VPN and local resources
+- Automatic DNS configuration based on server push
+
+<Note>
+The DNS script is automatically used unless a custom `--up` script is already configured.
+</Note>
+
+### DNS configuration methods
+
+The DNS script supports multiple macOS DNS management approaches:
+
+1. **scutil** (default): Uses System Configuration framework
+2. **resolveconf**: If installed via Homebrew or ports
+
+### Manual DNS configuration
+
+If the automatic DNS script doesn't meet your needs, you can use custom `--up` and `--down` scripts.
+
+**Example up script:**
+```bash
+#!/bin/bash
+scutil <<EOF
+d.init
+d.add ServerAddresses * ${foreign_option_dns1}
+set State:/Network/Service/${dev}/DNS
+EOF
+```
+
+## macOS-specific features
+
+### Tunnelblick integration
+
+Tunnelblick is the most popular OpenVPN GUI client for macOS:
+
+- Automatic TUN/TAP driver installation
+- Native macOS interface
+- Configuration file management
+- DNS leak protection
+- Automatic connection on startup
+
+### Keychain integration
+
+Store OpenVPN credentials securely in macOS Keychain:
+
+```bash
+security add-generic-password -a "OpenVPN" -s "VPN Password" -w
+```
+
+Retrieve in scripts:
+```bash
+security find-generic-password -a "OpenVPN" -s "VPN Password" -w
+```
+
+### Network extension framework
+
+Modern macOS OpenVPN clients may use the Network Extension framework for better system integration:
+
+- No kernel extensions required (on newer macOS versions)
+- Better integration with macOS network preferences
+- Improved security sandbox
+
+## Building from source
+
+### Prerequisites
+
+Install Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
+Install dependencies via Homebrew:
+
+```bash
+brew install openssl lzo lz4 pkg-config
+```
+
+### Compilation
+
+```bash
+autoreconf -i -v -f
+./configure \
+  --with-crypto-library=openssl \
+  OPENSSL_CFLAGS="-I$(brew --prefix openssl)/include" \
+  OPENSSL_LIBS="-L$(brew --prefix openssl)/lib -lssl -lcrypto"
+make
+sudo make install
+```
+
+## Permission requirements
+
+### Running as non-root
+
+OpenVPN typically requires root privileges for network configuration. However, you can minimize privilege requirements:
+
+1. **Use GUI clients**: Handle privilege escalation automatically
+2. **Use setuid**: Make the OpenVPN binary setuid root (security consideration)
+3. **Use helper tools**: Delegate privileged operations
+
+### TUN/TAP permissions
+
+macOS TUN/TAP devices require proper permissions:
+
+```bash
+sudo chown root:wheel /dev/tun*
+sudo chmod 0660 /dev/tun*
+```
+
+## Routing considerations
+
+### IPv6 support
+
+macOS fully supports IPv6 VPN tunnels:
+
+```bash
+openvpn --config myconfig.ovpn --ifconfig-ipv6 fd00::1/64 fd00::2
+```
+
+### Split tunneling
+
+Configure specific routes instead of full tunnel:
+
+```bash
+route 10.0.0.0 255.0.0.0 vpn_gateway
+route 192.168.1.0 255.255.255.0 net_gateway
+```
+
+### Default gateway redirection
+
+Redirect all traffic through VPN:
+
+```bash
+openvpn --config myconfig.ovpn --redirect-gateway def1
+```
+
+## Firewall integration
+
+macOS includes a built-in firewall (pf). Create firewall rules for VPN traffic:
+
+**Example `/etc/pf.conf` rules:**
+```
+# Allow VPN tunnel traffic
+pass on tun0 all
+
+# NAT VPN traffic
+nat on en0 from tun0:network to any -> (en0)
+```
+
+Reload firewall:
+```bash
+sudo pfctl -f /etc/pf.conf
+sudo pfctl -e
+```
+
+## Common macOS issues
+
+### TUN/TAP driver not loading
+
+**Symptoms:** "Cannot open TUN/TAP dev /dev/tun0"
+
+**Solutions:**
+1. Reinstall TUN/TAP drivers (usually via GUI client)
+2. Check System Preferences → Security & Privacy for blocked extensions
+3. Approve kernel extension if prompted
+
+### DNS not updating
+
+**Symptoms:** DNS queries not using VPN DNS servers
+
+**Solutions:**
+1. Verify DNS script execution: `--verb 4` for detailed logging
+2. Check for conflicts with other VPN software
+3. Manually flush DNS cache: `sudo dscacheutil -flushcache`
+
+### Permission denied errors
+
+**Symptoms:** Cannot configure network settings
+
+**Solutions:**
+1. Run with `sudo`: `sudo openvpn --config myconfig.ovpn`
+2. Use a GUI client that handles privilege escalation
+3. Check file permissions on configuration files
+
+### Connection drops on sleep/wake
+
+**Symptoms:** VPN disconnects when Mac sleeps
+
+**Solutions:**
+1. Use GUI clients with sleep/wake handling
+2. Add `--persist-tun` and `--persist-key` to configuration
+3. Enable automatic reconnection in client settings
+
+## Best practices
+
+1. **Use GUI clients** for desktop use (Tunnelblick or OpenVPN Connect)
+2. **Enable DNS leak protection** via client settings
+3. **Store credentials securely** in macOS Keychain
+4. **Test DNS configuration** after connecting: `scutil --dns`
+5. **Monitor logs** for connection issues: `--verb 4`
+6. **Keep TUN/TAP drivers updated** via GUI client updates
+
+## Performance optimization
+
+### MTU optimization
+
+Find optimal MTU:
+
+```bash
+ping -D -s 1472 vpn-server.example.com
+```
+
+Adjust downward until no fragmentation occurs, then set in configuration:
+
+```
+tun-mtu 1400
+```
+
+### Disable compression
+
+For modern high-bandwidth connections, compression can reduce performance:
+
+```
+compress migrate
+```
+
+### Buffer sizes
+
+Increase buffer sizes for better throughput:
+
+```
+sndbuf 393216
+rcvbuf 393216
+```
+
+## Resources
+
+- **Tunnelblick**: https://tunnelblick.net/
+- **OpenVPN Connect**: https://openvpn.net/client/
+- **Homebrew**: https://brew.sh/
+- **Community Wiki**: https://community.openvpn.net/openvpn/wiki

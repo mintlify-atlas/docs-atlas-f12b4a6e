@@ -1,0 +1,192 @@
+---
+title: Data channel offload
+description: Enable kernel-space packet processing with ovpn-dco for improved performance
+---
+
+OpenVPN 2.6.0+ supports data channel offload (DCO) where data packets are processed and forwarded directly in kernel space via the `ovpn-dco` kernel module. The userspace OpenVPN program acts purely as a control plane application, significantly improving performance.
+
+## How it works
+
+With DCO enabled, OpenVPN offloads the data channel processing to the kernel while maintaining control over:
+- Connection establishment
+- TLS negotiation
+- Authentication
+- Key management
+
+This architecture provides better throughput and lower CPU usage compared to traditional userspace packet processing.
+
+## Getting started
+
+<Steps>
+
+### Check kernel support
+
+On Linux 6.16+, the `ovpn` kernel module is included by default. For older kernels, use the [ovpn-backports](https://github.com/OpenVPN/ovpn-backports) project.
+
+### Build OpenVPN with DCO support
+
+```bash
+git clone https://github.com/openvpn/openvpn.git
+cd openvpn
+autoreconf -vi
+./configure --enable-dco
+make
+sudo make install
+```
+
+### Start OpenVPN
+
+OpenVPN automatically detects and uses DCO when available. No configuration changes are required.
+
+```bash
+openvpn --config client.conf
+```
+
+If DCO is not available, you'll see:
+
+```
+Note: Kernel support for ovpn-dco missing, disabling data channel offload.
+```
+
+</Steps>
+
+## Disabling DCO
+
+To explicitly disable data channel offload:
+
+```bash
+openvpn --config client.conf --disable-dco
+```
+
+OpenVPN will automatically fall back to userspace processing if:
+- The kernel module is not available
+- An incompatible option is detected
+- The configuration is not supported by DCO
+
+## Platform support
+
+### Linux
+
+The `ovpn` kernel module was merged upstream in Linux 6.16. It's compatible with OpenVPN 2.7+.
+
+For older kernels, build the module from [ovpn-backports](https://github.com/OpenVPN/ovpn-backports).
+
+### Windows
+
+Official releases from [openvpn.net](https://openvpn.net/community-downloads/) include the ovpn-dco-win driver since version 2.6.0.
+
+Snapshot releases are available at [build.openvpn.net](https://build.openvpn.net/downloads/snapshots/github-actions/openvpn2/).
+
+<Note>
+On Windows, DCO is only supported in client and P2P mode.
+</Note>
+
+## P2P mode support
+
+DCO works in P2P mode (without `--pull` or `--client` options), which is useful for "dumb" tunnel scenarios similar to GRE.
+
+<Warning>
+DCO requires DATA_V2 to be enabled, which is only available in P2P mode on OpenVPN 2.6+.
+</Warning>
+
+Verify P2P NCP negotiation:
+
+```
+P2P mode NCP negotiation result: TLS_export=1, DATA_v2=1, peer-id 9484735, cipher=AES-256-GCM
+```
+
+Ensure `DATA_v2=1` and an AEAD cipher (AES-XXX-GCM or CHACHA20POLY1305) are shown.
+
+## Routing with DCO
+
+The ovpn-dco kernel module uses the main kernel routing tables for forwarding decisions.
+
+### Key differences
+
+- Each client receives a VPN IPv4 and/or IPv6 address
+- Additional IP ranges are routed to clients via the kernel routing table:
+  ```bash
+  ip route add 10.8.1.0/24 via $CLIENT_VPN_IP
+  ```
+- No companion `--route` is needed for each `--iroute` unless you want to blackhole traffic when the client is disconnected
+- Internal routing is not available; use `iptables` or `ip rule` for filtering
+- Client-to-client behavior differs: packets always reach the tunnel interface and are re-routed based on the system routing table
+
+## Cipher support
+
+DCO only supports AEAD ciphers:
+
+- ChaCha20-Poly1305
+- AES-128-GCM
+- AES-192-GCM
+- AES-256-GCM
+
+<Info>
+On Windows, ChaCha20-Poly1305 support requires Windows 11.
+</Info>
+
+## Limitations
+
+### By design
+
+<Warning>
+The following features are not supported with DCO and will never be implemented:
+</Warning>
+
+- **Layer 2 (dev tap)** - Only `dev tun` is supported
+- **Compression** - Use `--compress migrate` to transition away from compression
+- **Legacy ciphers** - Only AEAD ciphers are supported
+- **Traffic shaping** - Use `tc` instead of `--shaper`
+- **Packet manipulation** - Use `nftables`/`iptables` instead
+- **Topology** - Only `topology subnet` is supported for servers
+- **Old clients** - OpenVPN 2.4.0+ is required (for AEAD cipher support)
+
+### Current implementation
+
+These limitations may be addressed in future releases:
+
+- `--persist-tun` is not fully tested
+- IPv6 mapped IPv4 addresses require Linux 5.4.189+/5.10.110+/5.12+
+- Some incompatible options may not properly fall back to non-DCO
+
+## Configuration example
+
+### Server
+
+```text
+port 1194
+proto udp
+dev tun
+
+# DCO works automatically
+ca ca.crt
+cert server.crt
+key server.key
+dh dh2048.pem
+
+server 10.8.0.0 255.255.255.0
+topology subnet
+
+cipher AES-256-GCM
+auth SHA256
+
+# Routes are managed via kernel routing table
+client-config-dir ccd
+```
+
+### Client
+
+```text
+client
+dev tun
+proto udp
+
+remote vpn.example.com 1194
+
+ca ca.crt
+cert client.crt
+key client.key
+
+cipher AES-256-GCM
+auth SHA256
+```

@@ -1,0 +1,508 @@
+---
+title: Advanced configuration examples
+description: Explore advanced OpenVPN configurations including compression, authentication methods, performance tuning, and specialized network scenarios.
+---
+
+This guide covers advanced OpenVPN configurations for specific use cases and performance optimization.
+
+## Using peer fingerprint authentication
+
+The `peer-fingerprint` option provides a simpler alternative to full PKI for small setups, perfect for home labs and small office deployments.
+
+### Server setup
+
+<Steps>
+  <Step title="Generate server certificate">
+    ```bash
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 \
+            -keyout server.key -out server.crt -nodes -sha256 -days 3650 \
+            -subj '/CN=server'
+    ```
+  </Step>
+
+  <Step title="Get server certificate fingerprint">
+    ```bash
+    openssl x509 -fingerprint -sha256 -in server.crt -noout
+    ```
+    
+    Output example:
+    ```
+    SHA256 Fingerprint=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
+    ```
+  </Step>
+
+  <Step title="Create server configuration">
+    ```bash server.conf
+    cert server.crt
+    key server.key
+    
+    dh none
+    dev tun
+    
+    # Listen on IPv6+IPv4
+    proto udp6
+    
+    # VPN subnet
+    server 10.8.0.0 255.255.255.0
+    server-ipv6 fd00:6f76:706e::/64
+    
+    # Optimize MTU
+    tun-mtu 1400
+    
+    # Client fingerprints (add one per line)
+    <peer-fingerprint>
+    # Add client fingerprints here
+    </peer-fingerprint>
+    
+    # Connection settings
+    explicit-exit-notify 1
+    keepalive 60 300
+    
+    # Optional: persistent IP addresses
+    ifconfig-pool-persist /etc/openvpn/server/ipp.txt
+    
+    # Optional: push DNS
+    push "dhcp-option DNS 1.1.1.1"
+    ```
+  </Step>
+</Steps>
+
+### Client setup
+
+<Steps>
+  <Step title="Generate client certificate">
+    ```bash
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 \
+            -keyout alice.key -out alice.crt -nodes -sha256 -days 3650 \
+            -subj '/CN=alice'
+    ```
+  </Step>
+
+  <Step title="Create client configuration">
+    ```bash alice.ovpn
+    remote yourserver.example.net
+    client
+    nobind
+    
+    # Inline certificate and key
+    <key>
+    -----BEGIN PRIVATE KEY-----
+    [paste alice.key contents]
+    -----END PRIVATE KEY-----
+    </key>
+    
+    <cert>
+    -----BEGIN CERTIFICATE-----
+    [paste alice.crt contents]
+    -----END CERTIFICATE-----
+    </cert>
+    
+    # Server fingerprint from server setup step 2
+    peer-fingerprint 00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
+    
+    tun-mtu 1400
+    dev tun
+    ```
+  </Step>
+
+  <Step title="Get client fingerprint and add to server">
+    ```bash
+    openssl x509 -fingerprint -sha256 -noout -in alice.crt
+    ```
+    
+    Add the output fingerprint to the server's `<peer-fingerprint>` section and restart the server.
+  </Step>
+</Steps>
+
+<Note>
+This method eliminates the need for a full PKI infrastructure, making it ideal for small deployments with fewer than 10-20 clients.
+</Note>
+
+## Cipher and authentication options
+
+### Modern cipher configuration
+
+```bash
+# Server and client: support multiple modern ciphers
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+# Optional: include legacy cipher for old clients
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC
+```
+
+### TLS version enforcement
+
+```bash
+# Require TLS 1.2 or higher
+tls-version-min 1.2
+
+# Or require TLS 1.3 only
+tls-version-min 1.3
+```
+
+### Authentication algorithm
+
+```bash
+# Use SHA256 for authentication
+auth SHA256
+
+# Or use SHA512 for maximum security
+auth SHA512
+```
+
+## Connection management
+
+### Load balancing across multiple servers
+
+```bash client.conf
+# Define multiple servers
+remote vpn1.example.com 1194
+remote vpn2.example.com 1194
+remote vpn3.example.com 1194
+
+# Choose random server for load balancing
+remote-random
+```
+
+### Connection retry behavior
+
+```bash
+# Keep trying to resolve hostname
+resolv-retry infinite
+
+# Or retry for 60 seconds then give up
+resolv-retry 60
+
+# Connection timeout
+connect-timeout 30
+
+# Reconnect if inactive (seconds)
+inactive 300
+```
+
+### Ping and keepalive
+
+```bash
+# Server side: ping every 10s, assume down after 120s
+keepalive 10 120
+
+# Client side: ping every 60s, restart after 300s
+keepalive 60 300
+
+# Alternative: explicit ping configuration
+ping 10
+ping-restart 120
+```
+
+## Protocol and transport options
+
+### TCP vs UDP
+
+<Tabs>
+  <Tab title="UDP (recommended)">
+    ```bash
+    proto udp
+    
+    # Or UDP on IPv6
+    proto udp6
+    ```
+    
+    Best for performance and most use cases.
+  </Tab>
+  
+  <Tab title="TCP">
+    ```bash
+    proto tcp
+    
+    # Or TCP on IPv6
+    proto tcp6
+    ```
+    
+    Use when UDP is blocked by firewalls.
+  </Tab>
+</Tabs>
+
+### Custom port configuration
+
+```bash
+# Server: listen on custom port
+port 443
+
+# Server: listen on specific IP
+local 192.168.1.10
+port 1194
+
+# Client: connect to custom port
+remote vpn.example.com 443
+```
+
+## Performance tuning
+
+### MTU and fragment size
+
+```bash
+# Set tunnel MTU
+tun-mtu 1400
+
+# Fragment packets larger than this
+fragment 1300
+
+# Or enable mssfix for TCP optimization
+mssfix 1400
+```
+
+### Buffer sizes
+
+```bash
+# Increase socket buffer sizes for high-throughput connections
+sndbuf 393216
+rcvbuf 393216
+```
+
+### Compression
+
+<Warning>
+Compression can expose you to VORACLE attacks. Only use on trusted networks or disable compression.
+</Warning>
+
+```bash
+# Server: allow compression
+compress lz4-v2
+
+# Client: enable compression
+compress lz4-v2
+
+# Or disable compression (recommended for security)
+compress
+```
+
+## Advanced routing scenarios
+
+### Selective routing
+
+Route only specific traffic through the VPN:
+
+```bash
+# Don't redirect all traffic
+# push "redirect-gateway def1"
+
+# Only route specific subnets
+push "route 10.0.0.0 255.255.0.0"
+push "route 172.16.0.0 255.240.0.0"
+push "route 192.168.0.0 255.255.0.0"
+```
+
+### IPv6 support
+
+```bash
+# Server configuration
+server-ipv6 fd00:6f76:706e::/64
+proto udp6
+
+# Push IPv6 routes
+push "route-ipv6 2001:db8::/32"
+
+# Push IPv6 DNS
+push "dhcp-option DNS6 2001:4860:4860::8888"
+```
+
+### Split DNS
+
+```bash
+# Push different DNS servers for different domains
+push "dhcp-option DNS 10.8.0.1"
+push "dhcp-option DOMAIN internal.example.com"
+push "dhcp-option DNS 8.8.8.8"
+```
+
+## Logging and monitoring
+
+### Comprehensive logging
+
+```bash
+# Server logging
+log-append /var/log/openvpn/server.log
+status /var/log/openvpn/status.log 10
+
+# Verbosity levels:
+# 0 = silent except fatal errors
+# 3 = recommended for production
+# 5-6 = debug connection issues
+# 9 = extremely verbose (like tcpdump)
+verb 3
+
+# Limit repeated messages
+mute 20
+```
+
+### Status file format
+
+```bash
+# Status file updated every 60 seconds
+status /var/log/openvpn-status.log 60
+
+# Version 2 format (more detailed)
+status /var/log/openvpn-status.log 60 2
+```
+
+## Scripting and automation
+
+### Execute scripts on events
+
+```bash
+# Run script after connection established
+up /etc/openvpn/up.sh
+
+# Run script before connection closed
+down /etc/openvpn/down.sh
+
+# Run script when client connects (server)
+client-connect /etc/openvpn/client-connect.sh
+
+# Run script when client disconnects (server)
+client-disconnect /etc/openvpn/client-disconnect.sh
+
+# Learn client addresses dynamically
+learn-address /etc/openvpn/learn-address.sh
+```
+
+### Script example
+
+```bash up.sh
+#!/bin/bash
+# Example up script
+
+# Environment variables available:
+# $dev - TUN/TAP device name
+# $local - local VPN IP
+# $remote - remote VPN IP
+# $ifconfig_local - local VPN endpoint IP
+
+echo "VPN connected on $dev"
+echo "Local IP: $ifconfig_local"
+echo "Remote IP: $ifconfig_remote"
+
+# Add custom routes
+ip route add 192.168.100.0/24 via $route_vpn_gateway
+
+# Update DNS
+echo "nameserver $route_vpn_gateway" > /etc/resolv.conf.openvpn
+```
+
+## Loopback testing
+
+For development and testing, you can run both client and server on the same machine:
+
+<CodeGroup>
+```bash loopback-server.conf
+# Loopback test - server side
+rport 16001
+lport 16000
+remote localhost
+local localhost
+dev null
+verb 3
+reneg-sec 10
+tls-server
+dh none
+ca sample-keys/ca.crt
+key sample-keys/server.key
+cert sample-keys/server.crt
+tls-auth sample-keys/ta.key 0
+cipher AES-256-GCM
+ping 1
+inactive 120 10000000
+```
+
+```bash loopback-client.conf
+# Loopback test - client side
+rport 16000
+lport 16001
+remote localhost
+local localhost
+dev null
+verb 3
+reneg-sec 10
+tls-client
+remote-cert-tls server
+ca sample-keys/ca.crt
+key sample-keys/client.key
+cert sample-keys/client.crt
+tls-auth sample-keys/ta.key 1
+cipher AES-256-GCM
+ping 1
+inactive 120 10000000
+```
+</CodeGroup>
+
+Run both configurations simultaneously:
+
+```bash
+# Terminal 1
+openvpn --config loopback-server.conf
+
+# Terminal 2
+openvpn --config loopback-client.conf
+```
+
+This performs TLS negotiation every 10 seconds and terminates after 2 minutes of inactivity.
+
+## HTTP proxy support
+
+Connect through an HTTP proxy:
+
+```bash
+# Basic proxy
+http-proxy proxy.example.com 8080
+
+# Proxy with authentication
+http-proxy proxy.example.com 8080 auth.txt
+
+# Retry connection failures
+http-proxy-retry
+```
+
+Create `auth.txt`:
+```
+username
+password
+```
+
+## Inline configuration files
+
+Embed certificates and keys directly in the configuration:
+
+```bash
+<ca>
+-----BEGIN CERTIFICATE-----
+[CA certificate content]
+-----END CERTIFICATE-----
+</ca>
+
+<cert>
+-----BEGIN CERTIFICATE-----
+[Client certificate content]
+-----END CERTIFICATE-----
+</cert>
+
+<key>
+-----BEGIN PRIVATE KEY-----
+[Private key content]
+-----END PRIVATE KEY-----
+</key>
+
+<tls-auth>
+-----BEGIN OpenVPN Static key V1-----
+[TLS auth key content]
+-----END OpenVPN Static key V1-----
+</tls-auth>
+key-direction 1
+```
+
+This creates a single, portable `.ovpn` file for easy distribution to clients.
+
+## Next steps
+
+- [Basic setup](/examples/basic-setup) - Start with simple configurations
+- [Security hardening](/security/hardening) - Maximize VPN security
+- [Troubleshooting](/operations/troubleshooting) - Solve common issues

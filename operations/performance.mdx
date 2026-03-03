@@ -1,0 +1,640 @@
+---
+title: Performance tuning
+description: Optimize OpenVPN performance through DCO, cipher selection, protocol tuning, and system configuration
+---
+
+This guide covers techniques to optimize OpenVPN performance for high-throughput and low-latency scenarios.
+
+## Data Channel Offload (DCO)
+
+DCO provides the most significant performance improvement by processing data packets directly in kernel space.
+
+### Overview
+
+OpenVPN 2.6+ supports data channel offloading where:
+- Data packets are processed in kernel space
+- Userspace OpenVPN acts as control plane only
+- Dramatically reduces CPU usage and improves throughput
+- Available on Linux (6.16+), Windows (10 2004+), and FreeBSD (14+)
+
+<Note>
+  DCO offers the best performance improvement with minimal configuration changes. It is automatically enabled when supported and compatible.
+</Note>
+
+### Enabling DCO
+
+<Steps>
+  <Step title="Verify kernel support">
+    **Linux (kernel 6.16+)**:
+    ```bash
+    # Check for ovpn module
+    lsmod | grep ovpn
+    
+    # Load module if not present
+    modprobe ovpn
+    ```
+
+    For older kernels, use ovpn-backports:
+    ```bash
+    # See https://github.com/OpenVPN/ovpn-backports
+    ```
+
+    **Windows (10 2004+/Server 2022)**:
+    - DCO-Win driver included in OpenVPN 2.6+ installers
+    - No additional setup required
+
+    **FreeBSD 14+**:
+    - ovpn(4) kernel module included
+    - Automatically available
+  </Step>
+
+  <Step title="Build OpenVPN with DCO support">
+    ```bash
+    git clone https://github.com/openvpn/openvpn.git
+    cd openvpn
+    autoreconf -vi
+    ./configure --enable-dco
+    make
+    sudo make install
+    ```
+
+    Verify DCO support:
+    ```bash
+    openvpn --version | grep dco
+    ```
+  </Step>
+
+  <Step title="Configure for DCO compatibility">
+    DCO is automatically enabled if configuration is compatible. Required settings:
+
+    ```bash
+    # Use layer 3 (tun) device
+    dev tun
+
+    # AEAD cipher required
+    data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+    # No compression (incompatible with DCO)
+    compress migrate
+
+    # Server: topology subnet required
+    topology subnet
+    ```
+  </Step>
+
+  <Step title="Verify DCO is active">
+    Check logs for DCO activation:
+    ```bash
+    grep -i dco /var/log/openvpn/server.log
+    ```
+
+    Success message:
+    ```
+    DCO device tun0 opened
+    ```
+
+    If disabled, you'll see:
+    ```
+    Note: Kernel support for ovpn-dco missing, disabling data channel offload.
+    ```
+  </Step>
+</Steps>
+
+### DCO limitations
+
+<Accordion title="By design limitations">
+  - **Layer 3 only**: No TAP (Layer 2) support
+  - **AEAD ciphers only**: AES-128/192/256-GCM and CHACHA20-POLY1305
+  - **No compression**: Compression and compression framing not supported
+  - **Topology**: Server requires `topology subnet`
+  - **Minimum version**: Peers must be OpenVPN 2.4.0+ (for AEAD cipher support)
+  - **Windows DCO**: Client and P2P mode only (not server mode)
+  - **Windows CHACHA20**: Requires Windows 11
+</Accordion>
+
+<Accordion title="Feature replacements">
+  These features are better handled at OS level with DCO:
+
+  - **Shaper**: Use `tc` (traffic control) instead of `--shaper`
+  - **Packet manipulation**: Use `nftables`/`iptables` instead
+  - **Client-to-client**: Handled by kernel routing table
+</Accordion>
+
+### DCO routing behavior
+
+DCO uses transparent kernel routing:
+
+```bash
+# Each client has VPN IP assigned
+# Route additional subnets via client VPN IP
+ip route add 192.168.10.0/24 via 10.8.0.5  # Route to client at 10.8.0.5
+
+# No internal routing
+# Packets always reach tunnel interface, then re-routed by kernel
+```
+
+<Tip>
+  With DCO, you typically don't need companion `--route` for each `--iroute` directive, unless you want to blackhole traffic when the specific client is disconnected.
+</Tip>
+
+### Disabling DCO
+
+If needed, disable DCO explicitly:
+
+```bash
+disable-dco
+```
+
+## Cipher and protocol optimization
+
+### Cipher selection
+
+Choose ciphers for best performance:
+
+<Accordion title="AEAD ciphers (recommended)">
+  AEAD (Authenticated Encryption with Associated Data) ciphers provide best performance:
+
+  ```bash
+  data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+  ```
+
+  **Performance characteristics**:
+  - **AES-GCM**: Best on CPUs with AES-NI hardware acceleration
+  - **CHACHA20-POLY1305**: Best on mobile/ARM devices without AES-NI
+  - AEAD ciphers are required for DCO
+
+  Check for AES-NI support:
+  ```bash
+  grep -m1 -o aes /proc/cpuinfo
+  lscpu | grep aes
+  ```
+</Accordion>
+
+<Accordion title="Cipher negotiation">
+  Enable automatic negotiation:
+
+  ```bash
+  # Server specifies allowed ciphers
+  data-ciphers AES-256-GCM:AES-128-GCM
+  
+  # Client negotiates best cipher
+  # (automatically uses server's data-ciphers)
+  ```
+
+  Verify negotiated cipher in logs:
+  ```bash
+  grep "Data Channel:" /var/log/openvpn/server.log
+  ```
+
+  <Note>
+    NCP (Negotiable Crypto Parameters) automatically selects the best cipher both peers support, offering best performance with least CPU usage.
+  </Note>
+</Accordion>
+
+<Accordion title="Legacy ciphers (avoid)">
+  Avoid non-AEAD ciphers for performance:
+  - CBC mode ciphers (AES-256-CBC, BF-CBC) are slower
+  - Require separate HMAC authentication overhead
+  - Not compatible with DCO
+</Accordion>
+
+### Protocol selection
+
+<Accordion title="UDP vs TCP">
+  **UDP (recommended)**:
+  ```bash
+  proto udp
+  ```
+
+  Advantages:
+  - Better performance and lower latency
+  - No TCP-over-TCP issues
+  - Handles packet loss better
+  - Lower overhead
+
+  **TCP** (use only when necessary):
+  ```bash
+  proto tcp-server  # Server
+  proto tcp-client  # Client
+  ```
+
+  Use TCP when:
+  - Firewall blocks UDP
+  - Network heavily drops UDP packets
+  - Need HTTP proxy support
+
+  <Warning>
+    TCP-over-TCP can cause severe performance degradation due to nested retransmission logic. Always prefer UDP when possible.
+  </Warning>
+</Accordion>
+
+<Accordion title="TCP optimization (when required)">
+  If you must use TCP, optimize with:
+
+  ```bash
+  proto tcp-server
+  tcp-nodelay  # Disable Nagle's algorithm
+  ```
+</Accordion>
+
+## Compression
+
+### Disable compression
+
+Compression typically hurts performance on modern networks:
+
+```bash
+# Gracefully disable compression
+compress migrate
+```
+
+<Accordion title="Why disable compression?">
+  - **CPU overhead**: Compression/decompression consumes CPU
+  - **Modern data**: Most internet traffic already compressed (HTTPS, video, etc.)
+  - **DCO incompatible**: Cannot use DCO with compression enabled
+  - **Security**: Compression can leak information in some scenarios
+
+  <Warning>
+    Compression is incompatible with DCO. Use `compress migrate` to transition existing deployments.
+  </Warning>
+</Accordion>
+
+<Accordion title="Migration strategy">
+  For existing deployments with compression:
+
+  1. **Phase 1**: Add to server config
+     ```bash
+     compress migrate
+     ```
+     This accepts both compressed and uncompressed clients.
+
+  2. **Phase 2**: Update all clients to remove compression
+
+  3. **Phase 3**: Remove `compress` directive from server
+</Accordion>
+
+## Network tuning
+
+### MTU optimization
+
+<Accordion title="Understanding MTU">
+  MTU (Maximum Transmission Unit) affects performance:
+  - Too large: Fragmentation and packet loss
+  - Too small: Excessive overhead
+
+  Default: OpenVPN uses adaptive MTU based on link MTU.
+</Accordion>
+
+<Accordion title="Finding optimal MTU">
+  Test MTU size:
+
+  ```bash
+  # Test with ping (1500 - 28 IP/UDP overhead = 1472)
+  ping -M do -s 1472 server.example.com
+  
+  # If fails, reduce incrementally
+  ping -M do -s 1450 server.example.com
+  ```
+
+  Set MTU in configuration:
+  ```bash
+  # Set TUN device MTU
+  tun-mtu 1400
+  
+  # Or let OpenVPN determine automatically
+  mtu-disc yes
+  ```
+</Accordion>
+
+<Accordion title="Fragment and MSS">
+  For UDP connections with large packets:
+
+  ```bash
+  # Fragment packets internally
+  fragment 1300
+  
+  # Adjust MSS for TCP connections through tunnel
+  mssfix 1300
+  ```
+
+  <Tip>
+    `mssfix` helps avoid fragmentation for TCP connections through the VPN tunnel by adjusting the TCP MSS value.
+  </Tip>
+</Accordion>
+
+### Socket buffer tuning
+
+Increase socket buffers for high-throughput connections:
+
+```bash
+# Send buffer (bytes)
+sndbuf 524288
+
+# Receive buffer (bytes)
+rcvbuf 524288
+```
+
+<Note>
+  Larger buffers help on high-latency or high-bandwidth networks. Start with 512KB and adjust based on testing.
+</Note>
+
+### Fast I/O
+
+Minimize latency:
+
+```bash
+# Optimize for low latency
+fast-io
+```
+
+This option optimizes packet handling for latency-sensitive applications.
+
+## System-level optimization
+
+### CPU affinity
+
+Pin OpenVPN to specific CPU cores:
+
+```bash
+# Using taskset
+taskset -c 0,1 openvpn --config /etc/openvpn/server.conf
+```
+
+### IRQ balancing
+
+Balance network interrupts across CPUs:
+
+```bash
+# Install irqbalance
+apt install irqbalance
+systemctl enable irqbalance
+systemctl start irqbalance
+```
+
+### Kernel parameters
+
+Optimize networking stack:
+
+```bash
+# Add to /etc/sysctl.conf
+
+# Increase max socket buffer sizes
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+
+# Increase TCP buffer sizes
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+
+# Enable TCP window scaling
+net.ipv4.tcp_window_scaling = 1
+
+# Increase connection tracking
+net.netfilter.nf_conntrack_max = 1048576
+
+# Apply changes
+sysctl -p
+```
+
+### File descriptor limits
+
+Increase limits for high client counts:
+
+```bash
+# Add to /etc/security/limits.conf
+root soft nofile 65536
+root hard nofile 65536
+openvpn soft nofile 65536
+openvpn hard nofile 65536
+
+# Or in systemd service file
+[Service]
+LimitNOFILE=65536
+```
+
+## Logging optimization
+
+### Reduce log verbosity
+
+High verbosity severely impacts performance:
+
+```bash
+# Production setting
+verb 3
+
+# NOT verb 5 or higher (for debugging only)
+```
+
+<Warning>
+  Running with `verb 5` or higher in production can reduce throughput by 50% or more, especially at level 5 which logs every packet.
+</Warning>
+
+### Mute repeated messages
+
+```bash
+# Limit repeated messages
+mute 20
+
+# Silence replay warnings on WiFi
+mute-replay-warnings
+```
+
+## Multi-threading and parallelization
+
+### Multiple server instances
+
+Run multiple OpenVPN processes for different clients:
+
+```bash
+# Server 1 on port 1194
+openvpn --config /etc/openvpn/server1.conf
+
+# Server 2 on port 1195
+openvpn --config /etc/openvpn/server2.conf
+```
+
+Benefits:
+- Each process uses separate CPU core
+- Better scalability
+- Load distribution
+
+### Process priority
+
+Increase OpenVPN priority:
+
+```bash
+# Using nice
+nice -n -10 openvpn --config /etc/openvpn/server.conf
+
+# Or in systemd service
+[Service]
+Nice=-10
+```
+
+## Monitoring performance
+
+### Measure throughput
+
+Test VPN throughput:
+
+```bash
+# Using iperf3
+# On server
+iperf3 -s
+
+# On client (through VPN)
+iperf3 -c 10.8.0.1 -t 30 -P 4
+```
+
+### Check CPU usage
+
+```bash
+# Monitor OpenVPN process
+top -p $(pgrep openvpn)
+
+# Detailed CPU stats
+pidstat -p $(pgrep openvpn) 1
+```
+
+### Network statistics
+
+```bash
+# Interface statistics
+ip -s link show tun0
+
+# Packet counts
+netstat -i | grep tun0
+
+# OpenVPN status
+kill -USR2 $(pgrep openvpn)  # Writes stats to log
+```
+
+## Hardware acceleration
+
+### AES-NI
+
+Verify CPU has AES-NI instructions:
+
+```bash
+grep -m1 -o aes /proc/cpuinfo
+```
+
+If available, use AES-GCM ciphers:
+```bash
+data-ciphers AES-256-GCM:AES-128-GCM
+```
+
+### Crypto offload
+
+Use cryptodev for hardware acceleration:
+
+```bash
+# Load cryptodev module (if available)
+modprobe cryptodev
+
+# OpenVPN will use automatically if available
+```
+
+## Performance checklist
+
+For optimal performance, ensure:
+
+<Steps>
+  <Step title="Enable DCO">
+    - Kernel module loaded
+    - Compatible configuration (tun, AEAD ciphers, no compression)
+    - OpenVPN built with `--enable-dco`
+  </Step>
+
+  <Step title="Use AEAD ciphers">
+    ```bash
+    data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+    ```
+  </Step>
+
+  <Step title="Use UDP protocol">
+    ```bash
+    proto udp
+    ```
+  </Step>
+
+  <Step title="Disable compression">
+    ```bash
+    compress migrate
+    ```
+  </Step>
+
+  <Step title="Optimize logging">
+    ```bash
+    verb 3
+    mute 20
+    ```
+  </Step>
+
+  <Step title="Tune network buffers">
+    ```bash
+    sndbuf 524288
+    rcvbuf 524288
+    ```
+  </Step>
+
+  <Step title="Optimize MTU">
+    ```bash
+    mtu-disc yes
+    mssfix 1300
+    ```
+  </Step>
+
+  <Step title="System tuning">
+    - Increase kernel buffer sizes
+    - Enable IRQ balancing
+    - Increase file descriptor limits
+  </Step>
+</Steps>
+
+## Benchmarking
+
+### Baseline test
+
+Establish performance baseline:
+
+<Steps>
+  <Step title="Test without VPN">
+    ```bash
+    iperf3 -c server.example.com -t 30
+    # Note: baseline throughput
+    ```
+  </Step>
+
+  <Step title="Test with VPN (no DCO)">
+    ```bash
+    # Disable DCO
+    disable-dco
+    
+    # Run iperf3 through VPN
+    iperf3 -c 10.8.0.1 -t 30
+    # Note: throughput and CPU usage
+    ```
+  </Step>
+
+  <Step title="Test with VPN (DCO enabled)">
+    ```bash
+    # Enable DCO (remove disable-dco)
+    
+    # Run iperf3 through VPN
+    iperf3 -c 10.8.0.1 -t 30
+    # Compare: throughput and CPU usage
+    ```
+  </Step>
+
+  <Step title="Compare results">
+    Expected improvements with DCO:
+    - 2-5x throughput increase
+    - 50-80% CPU usage reduction
+    - Lower latency
+  </Step>
+</Steps>
+
+<Tip>
+  DCO typically provides the single largest performance improvement. Focus on enabling DCO first before other optimizations.
+</Tip>

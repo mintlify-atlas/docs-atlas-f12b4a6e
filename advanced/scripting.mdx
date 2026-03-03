@@ -1,0 +1,608 @@
+---
+title: Scripting
+description: Execute external scripts at various phases of the OpenVPN lifecycle
+---
+
+OpenVPN can execute external scripts in various phases of the VPN connection lifecycle. Scripts receive environmental variables containing connection details and can perform custom actions like configuring routes, updating DNS, or integrating with external systems.
+
+## Script execution order
+
+Scripts are executed in the following order:
+
+<Steps>
+
+### DNS updown (pre-up)
+
+`--dns-updown` runs after socket bind and TUN/TAP open, before `--up`.
+
+### Up
+
+`--up` runs after successful TUN/TAP device open, before privilege drop.
+
+### TLS verify
+
+`--tls-verify` runs when verifying untrusted remote peers.
+
+### IP change
+
+`--ipchange` runs after authentication or remote IP address change.
+
+### Client connect
+
+`--client-connect` runs in server mode immediately after client authentication.
+
+### Route up
+
+`--route-up` runs after routes are added, respecting `--route-delay`.
+
+### Route pre-down
+
+`--route-pre-down` runs before routes are removed.
+
+### Client disconnect
+
+`--client-disconnect` runs in server mode on client shutdown.
+
+### DNS updown (pre-down)
+
+`--dns-updown` runs before TCP/UDP and TUN/TAP close, before `--down`.
+
+### Down
+
+`--down` runs after TCP/UDP and TUN/TAP close, after privilege drop.
+
+</Steps>
+
+## Common script hooks
+
+### Up script
+
+Executed after TUN/TAP device is opened:
+
+```text
+up /etc/openvpn/up.sh
+```
+
+For `dev tun`, the script receives:
+
+```bash
+#!/bin/bash
+# $1 = tun device (tun0)
+# $2 = tun MTU
+# $3 = 0 (reserved, was link_mtu)
+# $4 = local IP
+# $5 = remote IP
+# $6 = init or restart
+
+echo "Device: $1"
+echo "Local IP: $4"
+echo "Remote IP: $5"
+```
+
+For `dev tap`:
+
+```bash
+#!/bin/bash
+# $1 = tap device (tap0)
+# $2 = tap MTU
+# $3 = 0 (reserved)
+# $4 = local IP
+# $5 = netmask
+# $6 = init or restart
+
+echo "Device: $1"
+echo "Local IP: $4"
+echo "Netmask: $5"
+```
+
+### Down script
+
+Executed after TUN/TAP device close:
+
+```text
+down /etc/openvpn/down.sh
+```
+
+Receives the same parameters as `--up`.
+
+<Note>
+The `--down` script runs with reduced privileges if `--user` and `--group` are used.
+</Note>
+
+### Route up script
+
+Executed after routes are added:
+
+```text
+route-up /etc/openvpn/route-up.sh
+```
+
+Useful for additional route configuration:
+
+```bash
+#!/bin/bash
+# Add custom routes
+ip route add 10.0.0.0/8 via $route_vpn_gateway
+ip route add 172.16.0.0/12 via $route_vpn_gateway
+```
+
+### Client connect script (server)
+
+Executed when a client connects:
+
+```text
+client-connect /etc/openvpn/client-connect.sh
+```
+
+The script can generate dynamic configuration:
+
+```bash
+#!/bin/bash
+# Last argument is the config file path
+CONFIG_FILE="${!#}"
+
+# Generate client-specific configuration
+cat > "$CONFIG_FILE" << EOF
+ifconfig-push 10.8.0.100 255.255.255.0
+push "route 192.168.1.0 255.255.255.0"
+EOF
+```
+
+Return codes:
+- `0` - Allow connection
+- `1` - Reject connection
+- `2` - Defer decision (async processing)
+
+### Client disconnect script (server)
+
+Executed when a client disconnects:
+
+```text
+client-disconnect /etc/openvpn/client-disconnect.sh
+```
+
+Useful for cleanup and logging:
+
+```bash
+#!/bin/bash
+echo "Client $common_name disconnected"
+echo "Bytes sent: $bytes_sent"
+echo "Bytes received: $bytes_received"
+echo "Duration: $time_duration seconds"
+```
+
+### Auth user pass verify
+
+Verify username/password authentication:
+
+```text
+auth-user-pass-verify /etc/openvpn/auth.sh via-file
+```
+
+<CodeGroup>
+
+```bash via-file
+#!/bin/bash
+# $1 = temporary file with username and password
+
+USERNAME=$(head -n1 "$1")
+PASSWORD=$(tail -n1 "$1")
+
+# Verify credentials
+if verify_user "$USERNAME" "$PASSWORD"; then
+    exit 0  # Success
+else
+    exit 1  # Failure
+fi
+```
+
+```bash via-env
+#!/bin/bash
+# Credentials in environment variables
+# WARNING: Insecure on some platforms
+
+if verify_user "$username" "$password"; then
+    exit 0
+else
+    exit 1
+fi
+```
+
+</CodeGroup>
+
+<Warning>
+The `via-env` method is insecure on platforms where process environments are publicly visible. Use `via-file` instead.
+</Warning>
+
+Return codes:
+- `0` - Authentication successful
+- `1` - Authentication failed
+- `2` - Deferred authentication
+
+### TLS verify
+
+Verify peer certificates:
+
+```text
+tls-verify /etc/openvpn/tls-verify.sh
+```
+
+The script receives:
+
+```bash
+#!/bin/bash
+# $1 = certificate depth (0 = peer, 1 = CA)
+# $2 = X509 subject DN
+
+DEPTH=$1
+SUBJECT=$2
+
+if [ "$DEPTH" -eq 0 ]; then
+    # Verify peer certificate
+    if echo "$SUBJECT" | grep -q "CN=allowed-client"; then
+        exit 0
+    fi
+fi
+
+exit 1
+```
+
+### Learn address (server)
+
+Called when addresses are learned:
+
+```text
+learn-address /etc/openvpn/learn-address.sh
+```
+
+The script receives:
+
+```bash
+#!/bin/bash
+# $1 = operation (add, update, delete)
+# $2 = address (IP or MAC)
+# $3 = common name (for add/update only)
+
+OPERATION=$1
+ADDRESS=$2
+COMMON_NAME=$3
+
+case "$OPERATION" in
+    add|update)
+        # Add firewall rule for this address
+        iptables -A FORWARD -s "$ADDRESS" -j ACCEPT
+        ;;
+    delete)
+        # Remove firewall rule
+        iptables -D FORWARD -s "$ADDRESS" -j ACCEPT
+        ;;
+esac
+
+exit 0
+```
+
+### IP change
+
+Called when remote IP changes:
+
+```text
+ipchange /etc/openvpn/ipchange.sh
+```
+
+The script receives:
+
+```bash
+#!/bin/bash
+# $1 = new IP address
+# $2 = new port number
+
+echo "Remote IP changed to $1:$2"
+
+# Update /etc/hosts or DNS
+update_dns "$1"
+```
+
+## Environmental variables
+
+Scripts receive extensive environmental variables:
+
+### Connection information
+
+```bash
+$common_name         # Client certificate CN
+$trusted_ip          # Authenticated IP address
+$trusted_ip6         # Authenticated IPv6 address
+$trusted_port        # Authenticated port
+$untrusted_ip        # Unauthenticated IP
+$untrusted_port      # Unauthenticated port
+```
+
+### Network configuration
+
+```bash
+$dev                 # TUN/TAP device name (tun0)
+$dev_idx             # Device index (Windows)
+$tun_mtu             # TUN/TAP MTU
+$ifconfig_local      # Local VPN IP
+$ifconfig_remote     # Remote VPN IP (tun)
+$ifconfig_netmask    # Netmask (tap)
+$ifconfig_ipv6_local # Local IPv6 address
+```
+
+### Routing information
+
+```bash
+$route_vpn_gateway   # VPN gateway
+$route_net_gateway   # Pre-existing default gateway
+$route_network_1     # First route network
+$route_netmask_1     # First route netmask
+$route_gateway_1     # First route gateway
+```
+
+### Server mode variables
+
+```bash
+$ifconfig_pool_remote_ip   # Assigned client IP
+$ifconfig_pool_remote_ip6  # Assigned client IPv6
+$bytes_sent                # Total bytes sent
+$bytes_received            # Total bytes received
+$time_unix                 # Connection timestamp
+$time_duration             # Session duration
+```
+
+### DNS configuration
+
+```bash
+$dns_search_domain_1       # Search domain
+$dns_server_1_address_1    # DNS server address
+$dns_server_1_port_1       # DNS server port
+```
+
+### Script context
+
+```bash
+$script_context      # init or restart
+$script_type         # Script type (up, down, etc.)
+$signal              # Exit reason (sigusr1, etc.)
+```
+
+### Certificate information
+
+```bash
+$tls_id_0            # Certificate fields
+$tls_serial_0        # Certificate serial (decimal)
+$tls_serial_hex_0    # Certificate serial (hex)
+$tls_digest_0        # SHA1 fingerprint
+$tls_digest_sha256_0 # SHA256 fingerprint
+$peer_cert           # Path to peer certificate (PEM)
+```
+
+## Deferred authentication
+
+Scripts can defer authentication decisions for async processing:
+
+<Steps>
+
+### Return deferred exit code
+
+```bash
+#!/bin/bash
+# auth-user-pass-verify script
+
+# Start background processing
+/path/to/async-auth "$username" "$password" "$auth_control_file" &
+
+# Return deferred immediately
+exit 2
+```
+
+### Write result asynchronously
+
+```bash
+#!/bin/bash
+# async-auth script
+
+USERNAME=$1
+PASSWORD=$2
+CONTROL_FILE=$3
+
+# Perform lengthy authentication
+if check_ldap "$USERNAME" "$PASSWORD"; then
+    echo "1" > "$CONTROL_FILE"
+else
+    echo "0" > "$CONTROL_FILE"
+fi
+```
+
+### OpenVPN resumes
+
+OpenVPN monitors the control file and resumes when the result is available.
+
+</Steps>
+
+## Client configuration from scripts
+
+The `--client-connect` script can generate dynamic configuration:
+
+```bash
+#!/bin/bash
+CONFIG_FILE="${!#}"
+
+# Lookup client in database
+CLIENT_NET=$(get_client_network "$common_name")
+
+# Write configuration
+cat > "$CONFIG_FILE" << EOF
+# Assign static IP
+ifconfig-push 10.8.0.100 255.255.255.0
+
+# Push routes
+push "route $CLIENT_NET 255.255.255.0"
+push "route 192.168.1.0 255.255.255.0"
+
+# Set bandwidth limit
+shaper 1000000
+EOF
+```
+
+Supported directives in client config:
+- `ifconfig-push`
+- `ifconfig-ipv6-push`
+- `push`
+- `push-reset`
+- `iroute`
+- `iroute-ipv6`
+- `disable`
+
+See [client-config-dir](/reference/configuration#client-config-dir) for details.
+
+## Deferred client connect
+
+Defer client connection processing:
+
+```bash
+#!/bin/bash
+CONFIG_FILE="$client_connect_config_file"
+DEFERRED_FILE="$client_connect_deferred_file"
+
+# Indicate deferral
+echo "2" > "$DEFERRED_FILE"
+
+# Start background processing
+/path/to/async-connect "$common_name" "$CONFIG_FILE" "$DEFERRED_FILE" &
+
+exit 0
+```
+
+Background script:
+
+```bash
+#!/bin/bash
+COMMON_NAME=$1
+CONFIG_FILE=$2
+DEFERRED_FILE=$3
+
+# Generate configuration
+if create_client_config "$COMMON_NAME" "$CONFIG_FILE"; then
+    echo "1" > "$DEFERRED_FILE"  # Success
+else
+    echo "0" > "$DEFERRED_FILE"  # Failure
+fi
+```
+
+## String remapping
+
+OpenVPN remaps certain characters for security:
+
+- **X.509 names**: Alphanumeric, `_`, `-`, `.`, `@`, `:`, `/`, `=`
+- **Common names**: Alphanumeric, `_`, `-`, `.`, `@`
+- **Usernames**: Alphanumeric, `_`, `-`, `.`, `@`
+- **Passwords**: Any printable character except CR/LF
+
+Illegal characters are converted to `_` (underscore).
+
+<Warning>
+String remapping cannot be disabled. It's a critical security feature.
+</Warning>
+
+## Security considerations
+
+### Best practices
+
+1. **Validate all input** from environmental variables
+2. **Use absolute paths** in scripts
+3. **Quote variables** to prevent word splitting
+4. **Check return codes** of all commands
+5. **Log script actions** for debugging
+6. **Test thoroughly** before production
+7. **Use `set -e`** to exit on errors
+8. **Avoid shell execution** of untrusted data
+
+### Example secure script
+
+```bash
+#!/bin/bash
+set -e  # Exit on error
+set -u  # Exit on undefined variable
+set -o pipefail  # Exit on pipe failure
+
+# Validate inputs
+if [ -z "${common_name:-}" ]; then
+    echo "Error: common_name not set" >&2
+    exit 1
+fi
+
+# Use absolute paths
+LOG_FILE="/var/log/openvpn/connections.log"
+
+# Quote variables
+echo "$(date): Client ${common_name} connected from ${trusted_ip}" >> "$LOG_FILE"
+
+exit 0
+```
+
+## Debugging scripts
+
+Enable verbose logging:
+
+```text
+verb 6
+```
+
+Log script output:
+
+```bash
+#!/bin/bash
+LOG_FILE="/var/log/openvpn/script.log"
+
+exec >> "$LOG_FILE" 2>&1
+
+echo "=== Script started at $(date) ==="
+echo "Arguments: $@"
+env | sort
+echo "=== Script ended ==="
+```
+
+Test scripts manually:
+
+```bash
+# Simulate environment
+export common_name="test-client"
+export trusted_ip="192.168.1.100"
+export dev="tun0"
+
+# Run script
+/etc/openvpn/up.sh tun0 1500 0 10.8.0.1 10.8.0.2 init
+```
+
+## Script vs plugin
+
+<CodeGroup>
+
+```text Scripts
+✓ Easy to write and modify
+✓ Use familiar shell utilities
+✓ No compilation required
+✓ Quick prototyping
+✓ Portable across systems
+
+✗ Slower execution
+✗ Limited error handling
+✗ Process overhead
+```
+
+```text Plugins
+✓ Better performance
+✓ Lower overhead
+✓ State management
+✓ Access to OpenVPN internals
+✓ Compiled code
+
+✗ Requires C programming
+✗ Compilation needed
+✗ More complex development
+```
+
+</CodeGroup>
+
+For performance-critical operations, consider using [plugins](/advanced/plugins) instead.

@@ -1,0 +1,443 @@
+---
+title: Multi-client server setup
+description: Configure OpenVPN server to support multiple simultaneous clients with individual authentication, IP address management, and network policies.
+---
+
+The multi-client server configuration allows a single OpenVPN server to accept connections from multiple clients simultaneously, making it ideal for road warriors, remote workers, and distributed teams.
+
+## Architecture overview
+
+In a multi-client setup:
+
+- One OpenVPN server accepts connections from many clients
+- Each client gets a unique virtual IP address from a pool
+- The server can push routes and DNS settings to clients
+- Individual client configurations can be customized
+- Each client must have a unique certificate
+
+## Basic server configuration
+
+Here's a complete multi-client server configuration based on OpenVPN's official sample:
+
+```bash server.conf
+# Multi-client OpenVPN server configuration
+
+# Protocol and port
+port 1194
+proto udp
+
+# TUN device for IP routing
+dev tun
+
+# SSL/TLS certificates and keys
+ca ca.crt
+cert server.crt
+key server.key  # Keep this file secret
+
+# Diffie-Hellman parameters
+dh dh2048.pem
+
+# Network topology (subnet is recommended)
+topology subnet
+
+# VPN subnet - server takes 10.8.0.1, clients get remaining IPs
+server 10.8.0.0 255.255.255.0
+
+# Maintain client IP assignments across restarts
+ifconfig-pool-persist ipp.txt
+
+# Connection monitoring
+keepalive 10 120
+
+# Cryptographic settings
+cipher AES-256-GCM
+auth SHA256
+
+# Privilege downgrade after initialization (non-Windows)
+user openvpn
+group openvpn
+
+# Persist options to avoid access issues after privilege downgrade
+persist-key
+persist-tun
+
+# Status and logging
+status openvpn-status.log
+verb 3
+
+# Notify clients on server restart
+explicit-exit-notify 1
+```
+
+## Basic client configuration
+
+Each client uses this configuration to connect:
+
+```bash client.conf
+# Client configuration for multi-client server
+
+# Specify we're a client
+client
+
+# Use TUN device
+dev tun
+
+# Protocol must match server
+proto udp
+
+# Server hostname/IP and port
+remote my-server-1 1194
+
+# Keep trying to resolve server hostname
+resolv-retry infinite
+
+# Don't bind to a specific local port
+nobind
+
+# Privilege downgrade (non-Windows)
+user openvpn
+group openvpn
+
+# Persist options
+persist-key
+persist-tun
+
+# SSL/TLS parameters
+ca ca.crt
+cert client.crt
+key client.key
+
+# Verify server certificate
+remote-cert-tls server
+
+# Logging
+verb 3
+```
+
+<Warning>
+Each client must have its own unique certificate and key files. Never share certificates between clients.
+</Warning>
+
+## Certificate generation
+
+<Steps>
+  <Step title="Set up the certificate authority">
+    Use [Easy-RSA](https://github.com/OpenVPN/easy-rsa) to manage your PKI:
+    
+    ```bash
+    # Download and initialize Easy-RSA
+    git clone https://github.com/OpenVPN/easy-rsa.git
+    cd easy-rsa/easyrsa3
+    ./easyrsa init-pki
+    ```
+  </Step>
+
+  <Step title="Build the CA certificate">
+    ```bash
+    ./easyrsa build-ca
+    ```
+    
+    This creates `ca.crt` which both server and all clients will use.
+  </Step>
+
+  <Step title="Generate server certificate">
+    ```bash
+    ./easyrsa build-server-full server nopass
+    ```
+    
+    This creates `server.crt` and `server.key`.
+  </Step>
+
+  <Step title="Generate Diffie-Hellman parameters">
+    ```bash
+    ./easyrsa gen-dh
+    ```
+    
+    This creates `dh2048.pem` (or `dh4096.pem` depending on your settings).
+  </Step>
+
+  <Step title="Generate client certificates">
+    For each client (replace 'client1' with unique client names):
+    
+    ```bash
+    ./easyrsa build-client-full client1 nopass
+    ```
+    
+    This creates `client1.crt` and `client1.key`.
+  </Step>
+</Steps>
+
+## Advanced server features
+
+### Pushing routes to clients
+
+Make private networks behind the server accessible to clients:
+
+```bash
+# Push routes to clients
+push "route 192.168.10.0 255.255.255.0"
+push "route 192.168.20.0 255.255.255.0"
+```
+
+<Note>
+The private subnets must have routes back to the VPN subnet (10.8.0.0/24) pointing to the OpenVPN server.
+</Note>
+
+### Redirecting all client traffic through VPN
+
+Force all client internet traffic through the VPN:
+
+```bash
+push "redirect-gateway def1 bypass-dhcp"
+```
+
+<Warning>
+The server must be configured to NAT or bridge the TUN/TAP interface to the internet for this to work.
+</Warning>
+
+### Pushing DNS servers to clients
+
+```bash
+push "dhcp-option DNS 208.67.222.222"
+push "dhcp-option DNS 208.67.220.220"
+```
+
+### Allowing client-to-client communication
+
+By default, clients can only reach the server. To allow clients to see each other:
+
+```bash
+client-to-client
+```
+
+<Note>
+You may also need to configure firewall rules on the server's TUN/TAP interface.
+</Note>
+
+## Per-client configuration
+
+Customize settings for individual clients using client-config-dir.
+
+<Steps>
+  <Step title="Enable client-specific configurations">
+    Add to `server.conf`:
+    
+    ```bash
+    client-config-dir ccd
+    ```
+  </Step>
+
+  <Step title="Create the directory">
+    ```bash
+    mkdir /etc/openvpn/ccd
+    ```
+  </Step>
+
+  <Step title="Assign static IP to a client">
+    Create `/etc/openvpn/ccd/client1` (filename must match certificate Common Name):
+    
+    ```bash
+    # Assign static IP 10.8.0.10 to client1
+    ifconfig-push 10.8.0.10 255.255.255.0
+    ```
+  </Step>
+
+  <Step title="Grant access to client's subnet">
+    If client1 has a subnet (192.168.40.0/24) behind it:
+    
+    In `server.conf`:
+    ```bash
+    client-config-dir ccd
+    route 192.168.40.0 255.255.255.0
+    ```
+    
+    In `/etc/openvpn/ccd/client1`:
+    ```bash
+    iroute 192.168.40.0 255.255.255.0
+    ```
+  </Step>
+</Steps>
+
+## Security enhancements
+
+### TLS authentication
+
+Add an extra layer of security with HMAC authentication:
+
+```bash
+# Generate the key
+openvpn --genkey tls-auth ta.key
+```
+
+**On server:**
+```bash
+tls-auth ta.key 0
+```
+
+**On clients:**
+```bash
+tls-auth ta.key 1
+```
+
+### Limit concurrent clients
+
+```bash
+max-clients 100
+```
+
+### Prevent duplicate connections
+
+For production, each client should have unique certificates. For testing only:
+
+```bash
+duplicate-cn  # Only for testing!
+```
+
+## Complete production example
+
+Here's a production-ready configuration:
+
+<CodeGroup>
+```bash server.conf
+# Production multi-client OpenVPN server
+
+# Network settings
+port 1194
+proto udp
+dev tun
+topology subnet
+server 10.8.0.0 255.255.255.0
+
+# PKI and certificates
+ca ca.crt
+cert server.crt
+key server.key
+dh dh2048.pem
+
+# TLS hardening
+tls-auth ta.key 0
+tls-version-min 1.2
+cipher AES-256-GCM
+auth SHA256
+
+# Client configuration
+client-config-dir ccd
+ifconfig-pool-persist ipp.txt
+
+# Push network settings to clients
+push "route 192.168.10.0 255.255.255.0"
+push "dhcp-option DNS 10.8.0.1"
+push "redirect-gateway def1 bypass-dhcp"
+
+# Connection reliability
+keepalive 10 120
+persist-key
+persist-tun
+
+# Security
+user openvpn
+group openvpn
+max-clients 100
+
+# Logging and monitoring
+status /var/log/openvpn-status.log
+log-append /var/log/openvpn.log
+verb 3
+mute 20
+
+# Client notifications
+explicit-exit-notify 1
+```
+
+```bash client.conf
+# Production client configuration
+
+client
+dev tun
+proto udp
+
+# Server connection
+remote vpn.example.com 1194
+resolv-retry infinite
+nobind
+
+# Certificates
+ca ca.crt
+cert client.crt
+key client.key
+remote-cert-tls server
+
+# TLS authentication
+tls-auth ta.key 1
+
+# Cryptography
+cipher AES-256-GCM
+auth SHA256
+
+# Connection settings
+persist-key
+persist-tun
+
+# Privilege downgrade (Linux/Unix)
+user openvpn
+group openvpn
+
+# Logging
+verb 3
+mute 20
+```
+</CodeGroup>
+
+## Deployment
+
+<Tabs>
+  <Tab title="Systemd (Linux)">
+    1. Copy configuration and keys:
+    ```bash
+    sudo cp server.conf server.crt server.key ca.crt dh2048.pem ta.key /etc/openvpn/server/
+    ```
+    
+    2. Start the service:
+    ```bash
+    sudo systemctl start openvpn-server@server
+    sudo systemctl enable openvpn-server@server
+    ```
+    
+    3. Check status:
+    ```bash
+    sudo systemctl status openvpn-server@server
+    ```
+  </Tab>
+  
+  <Tab title="Manual start">
+    ```bash
+    sudo openvpn --config /etc/openvpn/server.conf
+    ```
+  </Tab>
+</Tabs>
+
+## Monitoring and troubleshooting
+
+### Check connected clients
+
+```bash
+cat /var/log/openvpn-status.log
+```
+
+### View server logs
+
+```bash
+tail -f /var/log/openvpn.log
+```
+
+### Test client connection
+
+```bash
+openvpn --config client.conf
+```
+
+## Next steps
+
+- [Site-to-site VPN](/examples/site-to-site) - Connect multiple office locations
+- [Advanced configurations](/examples/advanced-configs) - Explore advanced features
+- [Security hardening](/security/hardening) - Additional security measures

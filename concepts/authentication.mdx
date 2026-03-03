@@ -1,0 +1,531 @@
+---
+title: Authentication methods
+description: Learn about OpenVPN's authentication mechanisms including TLS certificates, static keys, and additional authentication layers
+---
+
+OpenVPN provides multiple authentication methods to verify the identity of connecting peers. Understanding these methods is crucial for implementing secure VPN deployments.
+
+## Authentication overview
+
+OpenVPN supports several authentication approaches, which can be combined for defense-in-depth:
+
+<Tabs>
+  <Tab title="Certificate-based">
+    **TLS/SSL certificates**
+    
+    The primary authentication method using PKI:
+    - X.509 certificates for peer identity
+    - RSA or ECDSA key pairs
+    - Certificate Authority (CA) validation
+    - Optional certificate attributes validation
+    
+    Most secure and recommended for production use.
+  </Tab>
+  
+  <Tab title="Static key">
+    **Pre-shared static keys**
+    
+    Simple authentication using shared secrets:
+    - Single key file shared between peers
+    - No PKI infrastructure required
+    - No perfect forward secrecy
+    - Suitable for simple P2P setups
+    
+    Simpler but less secure than certificates.
+  </Tab>
+  
+  <Tab title="Additional auth">
+    **Supplementary authentication**
+    
+    Extra authentication layers:
+    - Username/password authentication
+    - Two-factor authentication
+    - External authentication plugins
+    - PKCS#11 smart card support
+    
+    Can be combined with certificate authentication.
+  </Tab>
+</Tabs>
+
+## TLS/SSL certificate authentication
+
+The SSL/TLS security model is OpenVPN's primary authentication mechanism, providing strong identity verification and key exchange.
+
+### Certificate-based authentication flow
+
+1. **Initialization**: Each peer loads its certificate, private key, and CA certificate
+2. **TLS handshake**: Peers establish a secure control channel
+3. **Certificate validation**: Each peer validates the other's certificate chain
+4. **Key derivation**: Session keys are derived from TLS key material
+5. **Data channel setup**: Encrypted data channel established with derived keys
+
+<Info>
+OpenVPN is tightly bound to the OpenSSL library and derives much of its crypto capabilities from it. It also supports mbedTLS as an alternative backend.
+</Info>
+
+### TLS session structure
+
+From `src/openvpn/ssl.h:147`:
+
+```c
+/**
+ * Build master SSL context object that serves for the whole of OpenVPN
+ * instantiation
+ */
+struct tls_root_ctx *init_ssl(const struct options *options, 
+                               bool in_chroot);
+```
+
+The TLS context is initialized early in the OpenVPN startup sequence and contains:
+- Certificate and key material
+- CA and CRL information
+- TLS cipher configuration
+- Cryptographic parameters
+
+### Certificate validation
+
+OpenVPN performs rigorous certificate validation:
+
+<Accordion title="Standard validation">
+**Automatic certificate checks**
+
+- Certificate signature verification against CA
+- Certificate expiration date validation
+- Certificate revocation list (CRL) checking
+- Certificate purpose validation
+- Certificate chain validation
+
+<Warning>
+Always use certificates with appropriate key usage and extended key usage attributes. OpenVPN validates these attributes to prevent certificate misuse.
+</Warning>
+</Accordion>
+
+<Accordion title="Additional validation options">
+**Extended validation options**
+
+- `--remote-cert-tls` - Verify remote certificate type (client/server)
+- `--verify-x509-name` - Verify certificate subject or SAN
+- `--tls-verify` - Custom verification script
+- `--crl-verify` - Check certificate revocation
+
+```bash
+# Verify remote is a server certificate
+remote-cert-tls server
+
+# Verify certificate common name
+verify-x509-name "vpn.example.com" name
+```
+</Accordion>
+
+<Accordion title="Certificate attributes">
+**X.509 field extraction**
+
+From `src/openvpn/ssl.h:121`:
+
+```c
+/* Default field in X509 to be username */
+#define X509_USERNAME_FIELD_DEFAULT "CN"
+```
+
+OpenVPN can extract and validate various certificate fields:
+- Common Name (CN)
+- Subject Alternative Names (SAN)
+- Organization (O)
+- Organizational Unit (OU)
+- Email address
+
+These can be used for authorization decisions.
+</Accordion>
+
+### Key exchange methods
+
+OpenVPN uses key method 2 for TLS-based key exchange:
+
+```c
+#define KEY_METHOD_2 2
+```
+
+This method:
+- Uses TLS PRF (Pseudo-Random Function) with label "OpenVPN"
+- Derives separate keys for each direction
+- Supports perfect forward secrecy
+- Allows periodic key renegotiation
+
+<Note>
+Key method 2 has been the standard since OpenVPN 2.0. Earlier key methods are no longer supported.
+</Note>
+
+### TLS key export
+
+Modern OpenVPN versions support TLS key material export as defined in RFC 5705:
+
+From `src/openvpn/ssl.h:87`:
+
+```c
+/** Supports key derivation via TLS key material exporter [RFC5705] */
+#define IV_PROTO_TLS_KEY_EXPORT (1 << 3)
+```
+
+This provides:
+- Standardized key derivation
+- Better security properties
+- Compatibility with modern TLS libraries
+
+Enable via:
+```bash
+--tls-export-cert /path/to/export
+```
+
+## Static key authentication
+
+Static key mode uses a pre-shared secret key for both authentication and encryption.
+
+### Generating static keys
+
+From the documentation in `doc/man-sections/encryption-options.rst:66`:
+
+```bash
+# Generate a shared secret key
+$ openvpn --genkey secret shared.key
+$ openvpn --genkey tls-crypt shared.key
+$ openvpn --genkey tls-auth shared.key
+```
+
+All three commands generate the same type of key. The aliases are for convenience.
+
+<Warning>
+The key file must be shared with the peer over a pre-existing secure channel such as scp(1). Never send the key over an insecure channel.
+</Warning>
+
+### Static key structure
+
+From `src/openvpn/crypto.h:151`:
+
+```c
+/**
+ * Container for unidirectional cipher and HMAC key material.
+ * @ingroup control_processor. This is used as a wire format/file format
+ * key, so it cannot be changed to add fields or change the length of fields
+ */
+struct key
+{
+    uint8_t cipher[MAX_CIPHER_KEY_LENGTH];
+    /**< Key material for cipher operations. */
+    uint8_t hmac[MAX_HMAC_KEY_LENGTH];
+    /**< Key material for HMAC operations. */
+};
+```
+
+### Key direction
+
+Static keys can be used bidirectionally or unidirectionally:
+
+```c
+#define KEY_DIRECTION_BIDIRECTIONAL 0 
+#define KEY_DIRECTION_NORMAL        1 /* encrypt with keys[0], decrypt with keys[1] */
+#define KEY_DIRECTION_INVERSE       2 /* encrypt with keys[1], decrypt with keys[0] */
+```
+
+Using different keys for each direction improves security:
+
+```bash
+# Peer 1
+secret shared.key 0
+
+# Peer 2  
+secret shared.key 1
+```
+
+<Tip>
+Using key direction allows both peers to use the same key file while maintaining separate encryption/decryption keys, simplifying key management.
+</Tip>
+
+## Username/password authentication
+
+OpenVPN can layer username/password authentication on top of certificate authentication.
+
+### Client-side configuration
+
+From `src/openvpn/ssl.h:391`:
+
+```c
+/*
+ * Setup authentication username and password. If auth_file is given, 
+ * use the credentials stored in the file, however, if is_inline is 
+ * true then auth_file contains the username/password inline.
+ */
+void auth_user_pass_setup(const char *auth_file, bool is_inline,
+                          const struct static_challenge_info *sc_info);
+```
+
+Configuration options:
+
+```bash
+# Prompt for credentials
+auth-user-pass
+
+# Read from file
+auth-user-pass /path/to/credentials.txt
+
+# Inline credentials
+<auth-user-pass>
+username
+password
+</auth-user-pass>
+```
+
+### Server-side validation
+
+The server validates credentials through:
+
+1. **PAM (Pluggable Authentication Modules)**
+2. **Authentication scripts** via `--auth-user-pass-verify`
+3. **Management interface**
+4. **Authentication plugins**
+
+<Accordion title="Authentication plugins">
+**Plugin-based authentication**
+
+From `src/openvpn/ssl.h:212`:
+
+```c
+#ifdef ENABLE_PLUGIN
+    /* plugins may contribute options configuration */
+    init_verb_mute(&c, IVM_LEVEL_1);
+    init_plugins(&c);
+    open_plugins(&c, true, OPENVPN_PLUGIN_INIT_PRE_CONFIG_PARSE);
+#endif
+```
+
+Plugins can implement:
+- Custom authentication backends
+- Integration with existing auth systems
+- Two-factor authentication
+- LDAP/Active Directory integration
+</Accordion>
+
+### Authentication caching
+
+OpenVPN supports authentication caching to avoid repeated authentication:
+
+```c
+/*
+ * Ensure that no caching is performed on authentication information
+ */
+void ssl_set_auth_nocache(void);
+
+/*
+ * Getter method for retrieving the auth-nocache option.
+ */
+bool ssl_get_auth_nocache(void);
+```
+
+Control caching with:
+```bash
+# Disable caching
+auth-nocache
+
+# Use auth tokens (server)
+auth-gen-token
+```
+
+<Info>
+Auth tokens allow clients to reconnect without re-authenticating for a configured period, improving user experience while maintaining security.
+</Info>
+
+## TLS authentication (tls-auth)
+
+TLS-auth adds an HMAC signature to all TLS handshake packets, providing:
+
+- Protection against port scanning
+- DoS attack mitigation
+- Additional authentication layer
+- Replay protection for control channel
+
+From `doc/man-sections/encryption-options.rst:71`:
+
+```bash
+# Generate tls-auth key
+$ openvpn --genkey tls-auth ta.key
+
+# Use in configuration
+tls-auth ta.key 0  # direction 0 on one side
+tls-auth ta.key 1  # direction 1 on other side
+```
+
+<Warning>
+TLS-auth keys must be kept secret. If an attacker obtains the tls-auth key, they can initiate TLS handshakes (though they still need valid certificates to complete authentication).
+</Warning>
+
+## TLS encryption (tls-crypt)
+
+TLS-crypt improves upon tls-auth by encrypting control channel packets:
+
+```bash
+# Generate tls-crypt key
+$ openvpn --genkey tls-crypt tc.key
+
+# Use in configuration (no direction needed)
+tls-crypt tc.key
+```
+
+Advantages over tls-auth:
+- Encrypts control channel packets
+- Hides more information from attackers
+- Simpler configuration (no direction parameter)
+- Better protection against traffic analysis
+
+### TLS-crypt v2
+
+TLS-crypt v2 adds per-client keys and metadata support:
+
+From `doc/man-sections/encryption-options.rst:87`:
+
+```bash
+# Generate server key
+$ openvpn --genkey tls-crypt-v2-server v2server.key
+
+# Generate client key
+$ openvpn --tls-crypt-v2 v2server.key \
+    --genkey tls-crypt-v2-client v2client-1.key
+```
+
+Benefits:
+- Per-client revocation
+- Client metadata embedding
+- Server-side key management
+- Improved scalability
+
+<Note>
+TLS-crypt v2 client keys are wrapped using the server key, allowing the server to unwrap and validate them while maintaining per-client key isolation.
+</Note>
+
+## Authentication password management
+
+OpenVPN provides functions for secure password handling:
+
+```c
+/*
+ * Setup private key file password. If auth_file is given, use the
+ * credentials stored in the file.
+ */
+void pem_password_setup(const char *auth_file);
+
+/* Enables the use of user/password authentication */
+void enable_auth_user_pass(void);
+```
+
+### Purging authentication data
+
+For security, OpenVPN can purge cached authentication:
+
+```c
+/*
+ * Purge any stored authentication information, both for key files 
+ * and tunnel authentication. If PCKS #11 is enabled, purge 
+ * authentication for that too. Note that auth_token is not cleared.
+ */
+void ssl_purge_auth(const bool auth_user_pass_only);
+```
+
+This is useful when:
+- User logs out
+- Connection terminates
+- Security policy requires credential clearing
+
+## PKCS#11 smart card support
+
+OpenVPN supports hardware security tokens via PKCS#11:
+
+```bash
+# Use smart card for private key
+pkcs11-providers /usr/lib/opensc-pkcs11.so
+pkcs11-id 'serialized-id-string'
+```
+
+Advantages:
+- Private keys never leave the hardware device
+- PIN-based access control
+- Physical token possession required
+- Compliance with high-security requirements
+
+## Authentication protocol features
+
+OpenVPN implements several protocol features to enhance authentication:
+
+### IV_PROTO authentication flags
+
+From `src/openvpn/ssl.h:90`:
+
+```c
+/** Supports signaling keywords with AUTH_PENDING, e.g. timeout=xy */
+#define IV_PROTO_AUTH_PENDING_KW (1 << 4)
+
+/** Support for AUTH_FAIL,TEMP messages */
+#define IV_PROTO_AUTH_FAIL_TEMP (1 << 8)
+```
+
+These flags enable:
+- Deferred authentication (for 2FA prompts)
+- Temporary authentication failures
+- Enhanced authentication signaling
+
+### AUTH_PENDING support
+
+Allows servers to defer authentication while waiting for external validation:
+
+```
+AUTH_PENDING,timeout=60
+```
+
+Useful for:
+- Two-factor authentication
+- Out-of-band verification
+- Manual approval processes
+
+<Tip>
+AUTH_PENDING allows implementing sophisticated authentication flows like push notification approval or SMS verification codes without disconnecting the client.
+</Tip>
+
+## Security best practices
+
+<Tabs>
+  <Tab title="Certificate auth">
+    **Certificate authentication best practices:**
+    
+    - Use certificate expiration (1-2 years recommended)
+    - Implement CRL or OCSP for revocation
+    - Verify certificate attributes with `--remote-cert-tls`
+    - Use strong key sizes (2048-bit RSA minimum, 256-bit ECDSA)
+    - Protect private keys with encryption and proper permissions
+    - Use separate CA for VPN certificates
+  </Tab>
+  
+  <Tab title="Static keys">
+    **Static key best practices:**
+    
+    - Only use for simple P2P scenarios
+    - Use key direction for bidirectional configs
+    - Implement regular key rotation
+    - Transfer keys only via secure channels
+    - Use tls-crypt instead of tls-auth when possible
+    - Protect key files with restrictive permissions (0600)
+  </Tab>
+  
+  <Tab title="Defense in depth">
+    **Multi-layer authentication:**
+    
+    - Combine certificate + username/password
+    - Add tls-crypt for control channel protection
+    - Implement 2FA where appropriate
+    - Use authentication plugins for integration
+    - Monitor failed authentication attempts
+    - Implement account lockout policies
+  </Tab>
+</Tabs>
+
+## Related documentation
+
+- [Architecture](/concepts/architecture) - OpenVPN architecture overview
+- [Tunneling modes](/concepts/tunneling-modes) - Point-to-point vs client-server modes
+- [Encryption](/concepts/encryption) - Encryption and cipher information

@@ -1,0 +1,394 @@
+---
+title: Deployment strategies
+description: Best practices and strategies for deploying OpenVPN in production environments
+---
+
+This guide covers deployment strategies and best practices for running OpenVPN in production environments.
+
+## Installation methods
+
+<Steps>
+  <Step title="Install from package repositories">
+    Use official OpenVPN repositories for the most up-to-date packages:
+
+    ```bash
+    # Debian/Ubuntu
+    wget -O - https://swupdate.openvpn.net/repos/repo-public.gpg | apt-key add -
+    echo "deb http://build.openvpn.net/debian/openvpn/stable $(lsb_release -sc) main" > /etc/apt/sources.list.d/openvpn-aptrepo.list
+    apt update && apt install openvpn
+
+    # RHEL/CentOS/Fedora
+    yum install https://swupdate.openvpn.net/repos/openvpn-repo-pkg-key.pub
+    yum install openvpn
+    ```
+
+    <Note>
+      Package repositories are available for CentOS/Fedora, Debian, and Ubuntu. See the [OpenvpnSoftwareRepos](https://community.openvpn.net/openvpn/wiki/OpenvpnSoftwareRepos) wiki for details.
+    </Note>
+  </Step>
+
+  <Step title="Build from source">
+    For custom builds or the latest features:
+
+    ```bash
+    # From tarball
+    ./configure
+    make
+    sudo make install
+
+    # From source repository
+    git clone https://github.com/OpenVPN/openvpn
+    cd openvpn
+    autoreconf -i -v -f
+    ./configure
+    make
+    sudo make install
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    Test that OpenVPN is properly installed:
+
+    ```bash
+    openvpn --version
+    openvpn --show-ciphers
+    ```
+  </Step>
+</Steps>
+
+## System requirements
+
+### Required components
+
+<Accordion title="TUN/TAP driver">
+  A virtual network device driver is required for OpenVPN to function:
+
+  - **Linux 2.6+**: Built-in TUN/TAP driver
+    ```bash
+    modprobe tun
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    ```
+
+  - **FreeBSD**: TUN/TAP integrated in recent versions
+  - **OpenBSD**: Dynamically created tun devices
+  - **Windows**: TAP-Windows adapter included in installers
+</Accordion>
+
+<Accordion title="Cryptographic library">
+  Choose one of the following:
+
+  - **OpenSSL 1.1.0+** (recommended) - Available from https://www.openssl.org/
+  - **mbed TLS 2.0+** - Alternative encryption library from https://tls.mbed.org/
+</Accordion>
+
+<Accordion title="Linux-specific requirements">
+  On Linux systems, additional libraries are needed:
+
+  - `libnl-gen` - Required for kernel netlink support
+  - `libcap-ng` - Required for Linux capability handling
+</Accordion>
+
+### Optional components
+
+- **LZO compression library** - For link compression (https://www.oberhumer.com/opensource/lzo/)
+- **LZ4 compression library** - Alternative compression option
+
+<Warning>
+  Compression is not supported when using DCO (Data Channel Offload). Use `--compress migrate` to transition away from compression.
+</Warning>
+
+## Deployment modes
+
+### Server deployment
+
+For multi-client server deployments:
+
+```bash
+# Basic server configuration
+openvpn --config /etc/openvpn/server.conf --daemon
+```
+
+<Tip>
+  Use systemd or init scripts for automatic startup:
+  ```bash
+  systemctl enable openvpn-server@server
+  systemctl start openvpn-server@server
+  ```
+</Tip>
+
+### Client deployment
+
+For client connections:
+
+```bash
+# Connect to VPN server
+openvpn --config /etc/openvpn/client.conf
+```
+
+### Point-to-point deployment
+
+For P2P tunnels without client/server architecture:
+
+```bash
+# Static key mode
+openvpn --remote server.example.com --dev tun --ifconfig 10.4.0.1 10.4.0.2 --secret static.key
+```
+
+<Note>
+  P2P mode with DCO requires DATA_V2 support, available in OpenVPN 2.6+. Verify with:
+  ```
+  P2P mode NCP negotiation result: TLS_export=1, DATA_v2=1, peer-id 9484735, cipher=AES-256-GCM
+  ```
+</Note>
+
+## Security best practices
+
+### Certificate management
+
+<Steps>
+  <Step title="Generate certificate authority">
+    Create a secure CA for signing certificates:
+
+    ```bash
+    # Using easy-rsa
+    git clone https://github.com/OpenVPN/easy-rsa
+    cd easy-rsa/easyrsa3
+    ./easyrsa init-pki
+    ./easyrsa build-ca
+    ```
+
+    <Warning>
+      Never use test certificates and keys from OpenVPN distributions in production environments.
+    </Warning>
+  </Step>
+
+  <Step title="Generate server certificates">
+    ```bash
+    ./easyrsa gen-req server nopass
+    ./easyrsa sign-req server server
+    ```
+  </Step>
+
+  <Step title="Generate client certificates">
+    ```bash
+    ./easyrsa gen-req client1 nopass
+    ./easyrsa sign-req client client1
+    ```
+  </Step>
+
+  <Step title="Generate Diffie-Hellman parameters">
+    ```bash
+    ./easyrsa gen-dh
+    ```
+  </Step>
+</Steps>
+
+### TLS authentication
+
+Add an HMAC authentication layer to protect against DoS attacks:
+
+```bash
+# Generate TLS auth key
+openvpn --genkey secret ta.key
+
+# Server configuration
+tls-auth ta.key 0
+
+# Client configuration
+tls-auth ta.key 1
+```
+
+<Tip>
+  Consider using `tls-crypt` instead of `tls-auth` for additional packet encryption:
+  ```bash
+  openvpn --genkey tls-crypt tls-crypt.key
+  ```
+</Tip>
+
+### Privilege management
+
+Run OpenVPN with reduced privileges after initialization:
+
+```bash
+# In configuration file
+user nobody
+group nogroup
+persist-key
+persist-tun
+```
+
+## High availability setup
+
+### Multiple remote entries
+
+Configure fallback servers for clients:
+
+```bash
+remote primary.vpn.example.com 1194 udp
+remote secondary.vpn.example.com 1194 udp
+remote tertiary.vpn.example.com 1194 tcp
+remote-random  # Randomize connection order
+```
+
+### Server clustering
+
+For load balancing across multiple servers:
+
+<Accordion title="Load balancer configuration">
+  Use a load balancer in front of multiple OpenVPN servers:
+
+  - UDP load balancing requires session affinity
+  - TCP connections can use round-robin
+  - Share client certificate database across servers
+  - Use consistent `--server` address ranges
+</Accordion>
+
+<Accordion title="Shared configuration">
+  Synchronize these files across all servers:
+
+  - Server certificates and keys
+  - CA certificates
+  - DH parameters
+  - TLS auth/crypt keys
+  - Client configuration directory (if using `--client-config-dir`)
+</Accordion>
+
+## Configuration management
+
+### Directory structure
+
+Organize configuration files systematically:
+
+```
+/etc/openvpn/
+├── server/
+│   ├── server.conf
+│   ├── ca.crt
+│   ├── server.crt
+│   ├── server.key
+│   ├── dh.pem
+│   ├── ta.key
+│   └── ccd/           # Client-specific configs
+├── client/
+│   ├── client.conf
+│   ├── ca.crt
+│   ├── client.crt
+│   ├── client.key
+│   └── ta.key
+└── keys/              # Backup keys (secure separately)
+```
+
+<Warning>
+  Protect private keys with appropriate file permissions:
+  ```bash
+  chmod 600 /etc/openvpn/server/server.key
+  chown root:root /etc/openvpn/server/server.key
+  ```
+</Warning>
+
+### Logging configuration
+
+Set up appropriate logging for production:
+
+```bash
+# Log to file
+log-append /var/log/openvpn/server.log
+
+# Or use syslog
+syslog openvpn-server
+
+# Set verbosity (3 recommended for production)
+verb 3
+
+# Limit repeated messages
+mute 20
+```
+
+## Service management
+
+### Systemd integration
+
+Manage OpenVPN as a systemd service:
+
+```bash
+# Enable and start server
+systemctl enable openvpn-server@server
+systemctl start openvpn-server@server
+
+# Check status
+systemctl status openvpn-server@server
+
+# View logs
+journalctl -u openvpn-server@server -f
+```
+
+### Graceful restarts
+
+Reload configuration without disconnecting clients:
+
+```bash
+# Send SIGHUP to reload
+systemctl reload openvpn-server@server
+
+# Or use kill
+kill -HUP $(pgrep openvpn)
+```
+
+<Note>
+  SIGHUP causes OpenVPN to reload the configuration and reconnect. For servers, existing client connections will be preserved when possible.
+</Note>
+
+## Testing deployment
+
+### Crypto self-test
+
+Verify encryption functionality:
+
+```bash
+openvpn --genkey secret key
+openvpn --test-crypto --secret key
+```
+
+### TLS negotiation test
+
+Test SSL/TLS connections using loopback:
+
+```bash
+# Terminal 1
+openvpn --config sample/sample-config-files/loopback-server
+
+# Terminal 2
+openvpn --config sample/sample-config-files/loopback-client
+```
+
+These tests run for 2 minutes and verify TLS negotiation.
+
+### Connection verification
+
+After deployment, verify connections:
+
+<Steps>
+  <Step title="Check process status">
+    ```bash
+    ps aux | grep openvpn
+    systemctl status openvpn-server@server
+    ```
+  </Step>
+
+  <Step title="Verify interface creation">
+    ```bash
+    ip addr show tun0
+    ifconfig tun0
+    ```
+  </Step>
+
+  <Step title="Test connectivity">
+    ```bash
+    # From client, ping server VPN address
+    ping 10.8.0.1
+
+    # Check routing
+    ip route
+    ```
+  </Step>
+</Steps>

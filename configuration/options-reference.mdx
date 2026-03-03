@@ -1,0 +1,918 @@
+---
+title: Common configuration options
+description: Complete reference guide to the most commonly used OpenVPN configuration directives and parameters
+---
+
+## Overview
+
+This reference covers the most frequently used OpenVPN configuration options. Options are organized by category for easy navigation.
+
+<Note>
+This reference focuses on commonly used options. For a complete list, consult the OpenVPN man page or use `openvpn --help`.
+</Note>
+
+## General options
+
+### config
+
+Load configuration from a file.
+
+```conf
+config /etc/openvpn/server.conf
+```
+
+<Note>
+If `--config` is the only argument, it can be omitted: `openvpn server.conf`
+</Note>
+
+### daemon
+
+Run OpenVPN as a daemon.
+
+```conf
+# Run as daemon with default name
+daemon
+
+# Run as daemon with custom program name
+daemon openvpn-server
+```
+
+### cd
+
+Change directory before reading configuration files.
+
+```conf
+cd /etc/openvpn
+# All relative paths now start from /etc/openvpn
+```
+
+### user / group
+
+Drop privileges after initialization (Linux/Unix).
+
+```conf
+user openvpn
+group openvpn
+```
+
+<Warning>
+When dropping privileges, you must use `persist-tun` and `persist-key` to prevent errors on restart.
+</Warning>
+
+### verb
+
+Set logging verbosity level (0-11).
+
+```conf
+verb 3  # Default: normal verbosity
+
+# Verbosity levels:
+# 0 - Silent except for fatal errors
+# 1-4 - Normal usage range  
+# 5-6 - Debug information
+# 9 - Extremely verbose
+```
+
+### mute
+
+Suppress repetitive log messages.
+
+```conf
+mute 20  # Suppress after 20 sequential identical messages
+```
+
+### log / log-append
+
+Write log output to a file.
+
+```conf
+# Truncate log file on startup
+log /var/log/openvpn.log
+
+# Append to existing log file
+log-append /var/log/openvpn.log
+```
+
+### status
+
+Write operational status to a file.
+
+```conf
+# Update status every 60 seconds (default)
+status /var/log/openvpn-status.log
+
+# Custom update interval
+status /var/log/openvpn-status.log 30
+```
+
+### writepid
+
+Write main process ID to a file.
+
+```conf
+writepid /var/run/openvpn.pid
+```
+
+## Connection options
+
+### client
+
+Enable client mode (equivalent to `pull` + `tls-client`).
+
+```conf
+client
+```
+
+### remote
+
+Specify remote server to connect to.
+
+```conf
+# Basic format
+remote hostname port protocol
+
+# Examples
+remote vpn.example.com 1194
+remote vpn.example.com 1194 udp
+remote vpn.example.com 443 tcp
+remote vpn.example.com 1194 udp6  # Force IPv6
+```
+
+<Note>
+Multiple `remote` entries provide automatic failover.
+</Note>
+
+### remote-random
+
+Randomize the order of remote servers.
+
+```conf
+remote server1.example.com 1194
+remote server2.example.com 1194
+remote-random  # Load balance across servers
+```
+
+### port
+
+Set TCP/UDP port for listening (server) or connecting (client).
+
+```conf
+port 1194  # Default OpenVPN port
+```
+
+### proto
+
+Specify transport protocol.
+
+```conf
+proto udp   # UDP (recommended for most cases)
+proto tcp   # TCP
+proto udp4  # Force IPv4 UDP
+proto tcp6  # Force IPv6 TCP
+```
+
+### dev
+
+Specify TUN/TAP device type.
+
+```conf
+dev tun   # IP tunnel (Layer 3) - most common
+dev tap   # Ethernet tunnel (Layer 2)
+dev tun0  # Specific device number
+```
+
+### dev-node
+
+Specify device name (Windows).
+
+```conf
+dev-node "Local Area Connection 2"
+```
+
+### nobind
+
+Don't bind to a local port (client mode).
+
+```conf
+nobind  # Allow OS to choose ephemeral port
+```
+
+### resolv-retry
+
+Retry DNS resolution on failure.
+
+```conf
+resolv-retry infinite  # Keep trying forever (good for laptops)
+resolv-retry 60        # Retry for 60 seconds
+resolv-retry 0         # Don't retry (fail immediately)
+```
+
+### connect-retry
+
+Wait time between connection attempts.
+
+```conf
+connect-retry 5     # Wait 5 seconds between attempts
+connect-retry 5 300 # Wait 5 seconds, max 300 seconds
+```
+
+### connect-retry-max
+
+Maximum connection attempts per remote.
+
+```conf
+connect-retry-max 3  # Try each server 3 times
+```
+
+## Server mode options
+
+### server
+
+Configure server mode with automatic setup.
+
+```conf
+server 10.8.0.0 255.255.255.0
+
+# Without dynamic IP pool
+server 10.8.0.0 255.255.255.0 nopool
+```
+
+<Note>
+The `--server` directive automatically configures mode, tls-server, ifconfig-pool, route, and push directives.
+</Note>
+
+### topology
+
+Set server network topology.
+
+```conf
+topology subnet  # Recommended: uses /24 subnet
+topology net30   # Legacy: uses /30 per client (wasteful)
+topology p2p     # Point-to-point
+```
+
+### server-bridge
+
+Configure server for ethernet bridging (TAP mode).
+
+```conf
+# DHCP mode
+server-bridge
+
+# Static pool
+server-bridge 10.8.0.4 255.255.255.0 10.8.0.100 10.8.0.200
+
+# No gateway push
+server-bridge nogw
+```
+
+### push
+
+Push configuration options to clients.
+
+```conf
+push "route 192.168.1.0 255.255.255.0"
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 8.8.8.8"
+push "dns server 0 address 8.8.8.8"
+push "inactive 3600"
+```
+
+### client-config-dir
+
+Directory for per-client configuration files.
+
+```conf
+client-config-dir /etc/openvpn/ccd
+```
+
+### ifconfig-pool
+
+Set IP address pool for clients.
+
+```conf
+ifconfig-pool 10.8.0.100 10.8.0.200
+```
+
+### ifconfig-pool-persist
+
+Persist client IP assignments.
+
+```conf
+ifconfig-pool-persist ipp.txt
+ifconfig-pool-persist ipp.txt 600  # Update every 600 seconds
+```
+
+### ifconfig-push
+
+Push specific IP to client (use in CCD file).
+
+```conf
+ifconfig-push 10.8.0.100 255.255.255.0
+```
+
+### iroute
+
+Route client subnet internally (use in CCD file).
+
+```conf
+iroute 192.168.40.0 255.255.255.0
+```
+
+### client-to-client
+
+Allow clients to communicate directly.
+
+```conf
+client-to-client
+```
+
+### duplicate-cn
+
+Allow multiple clients with same certificate.
+
+```conf
+duplicate-cn
+```
+
+<Warning>
+Only use `duplicate-cn` for testing. Production environments should use unique certificates.
+</Warning>
+
+### max-clients
+
+Limit concurrent client connections.
+
+```conf
+max-clients 100
+```
+
+### max-routes-per-client
+
+Limit routes per client (DoS protection).
+
+```conf
+max-routes-per-client 256
+```
+
+## Client mode options
+
+### pull
+
+Accept options pushed by server.
+
+```conf
+pull  # Automatically enabled by --client
+```
+
+### pull-filter
+
+Filter options pushed by server.
+
+```conf
+pull-filter accept "route 192.168.1."
+pull-filter ignore "route "
+pull-filter reject "redirect-gateway"
+```
+
+### auth-user-pass
+
+Authenticate with username/password.
+
+```conf
+# Prompt for credentials
+auth-user-pass
+
+# Read from file
+auth-user-pass credentials.txt
+
+# Inline
+<auth-user-pass>
+username
+password
+</auth-user-pass>
+```
+
+### auth-retry
+
+Control behavior on authentication failure.
+
+```conf
+auth-retry none       # Exit on failure (default)
+auth-retry nointeract # Retry without prompting
+auth-retry interact   # Prompt again
+```
+
+## TLS/SSL options
+
+### ca
+
+Certificate Authority certificate.
+
+```conf
+ca /etc/openvpn/ca.crt
+
+# Or inline
+<ca>
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+</ca>
+```
+
+### cert
+
+Local peer certificate.
+
+```conf
+cert /etc/openvpn/client.crt
+
+<cert>
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+</cert>
+```
+
+### key
+
+Local private key.
+
+```conf
+key /etc/openvpn/client.key
+
+<key>
+-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----
+</key>
+```
+
+### dh
+
+Diffie-Hellman parameters (server only).
+
+```conf
+dh /etc/openvpn/dh2048.pem
+```
+
+### remote-cert-tls
+
+Verify remote certificate type.
+
+```conf
+remote-cert-tls server  # Client mode: verify server cert
+remote-cert-tls client  # Server mode: verify client cert
+```
+
+### tls-auth
+
+Add HMAC authentication to TLS handshake.
+
+```conf
+# Server uses direction 0
+tls-auth ta.key 0
+
+# Client uses direction 1  
+tls-auth ta.key 1
+```
+
+Generate the key:
+
+```bash
+openvpn --genkey secret ta.key
+```
+
+### tls-version-min
+
+Minimum TLS version.
+
+```conf
+tls-version-min 1.2
+tls-version-min 1.3
+```
+
+### verify-client-cert
+
+Client certificate requirement.
+
+```conf
+verify-client-cert require   # Require cert (default)
+verify-client-cert optional  # Cert optional
+verify-client-cert none      # No cert required
+```
+
+## Encryption options
+
+### data-ciphers
+
+List of allowed ciphers (negotiated with peer).
+
+```conf
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+# Support legacy clients
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC
+```
+
+### auth
+
+HMAC authentication algorithm.
+
+```conf
+auth SHA256
+auth SHA512
+auth SHA1  # Legacy
+```
+
+## Routing options
+
+### route
+
+Add route to routing table.
+
+```conf
+route 192.168.1.0 255.255.255.0
+route 10.0.0.0 255.0.0.0
+route 192.168.100.0 255.255.255.0 10.8.0.1  # Via specific gateway
+```
+
+### route-gateway
+
+Specify default gateway for routes.
+
+```conf
+route-gateway 10.8.0.1
+```
+
+### redirect-gateway
+
+Redirect default gateway through VPN.
+
+```conf
+push "redirect-gateway def1 bypass-dhcp"
+push "redirect-gateway def1 bypass-dns"
+```
+
+## Keepalive and timeout options
+
+### keepalive
+
+Configure connection keepalive.
+
+```conf
+# Ping every 10 seconds, assume down after 120 seconds
+keepalive 10 120
+```
+
+<Note>
+`keepalive` is a server directive that pushes equivalent ping settings to clients.
+</Note>
+
+### ping / ping-restart
+
+Manually configure keepalive.
+
+```conf
+ping 10          # Send ping every 10 seconds
+ping-restart 120 # Restart if no response for 120 seconds
+```
+
+### inactive
+
+Disconnect after inactivity period.
+
+```conf
+inactive 600       # Disconnect after 600 seconds of inactivity
+inactive 600 10000 # Or less than 10000 bytes transferred
+```
+
+### explicit-exit-notify
+
+Notify peer on exit or restart.
+
+```conf
+explicit-exit-notify 1  # Send exit notification
+```
+
+## Persistence options
+
+### persist-tun
+
+Don't close/reopen TUN/TAP device on restart.
+
+```conf
+persist-tun
+```
+
+### persist-key
+
+Don't re-read keys on restart.
+
+```conf
+persist-key
+```
+
+<Note>
+Use both `persist-tun` and `persist-key` when dropping privileges with `--user` and `--group`.
+</Note>
+
+## DNS options
+
+### dns (OpenVPN 2.6+)
+
+Configure DNS settings (modern).
+
+```conf
+push "dns server 0 address 8.8.8.8"
+push "dns server 0 address 8.8.4.4"
+push "dns search-domains example.com"
+```
+
+### dhcp-option (legacy)
+
+Push DHCP options (older versions).
+
+```conf
+push "dhcp-option DNS 8.8.8.8"
+push "dhcp-option DNS 8.8.4.4"
+push "dhcp-option DOMAIN example.com"
+```
+
+## Proxy options
+
+### http-proxy
+
+Connect through HTTP proxy.
+
+```conf
+# Basic
+http-proxy proxy.example.com 8080
+
+# With authentication
+http-proxy proxy.example.com 8080 credentials.txt
+
+# With retry
+http-proxy proxy.example.com 8080
+http-proxy-retry
+```
+
+### socks-proxy
+
+Connect through SOCKS proxy.
+
+```conf
+socks-proxy proxy.example.com 1080
+```
+
+## Script and plugin options
+
+### script-security
+
+Control script execution.
+
+```conf
+script-security 0  # No scripts
+script-security 1  # Built-in only (default)
+script-security 2  # Allow user scripts
+script-security 3  # Allow passwords in environment
+```
+
+### up / down
+
+Run script after interface up/down.
+
+```conf
+up /etc/openvpn/up.sh
+down /etc/openvpn/down.sh
+script-security 2
+```
+
+### client-connect / client-disconnect
+
+Run script on client connection (server).
+
+```conf
+client-connect /etc/openvpn/connect.sh
+client-disconnect /etc/openvpn/disconnect.sh
+script-security 2
+```
+
+### auth-user-pass-verify
+
+Verify username/password with script (server).
+
+```conf
+auth-user-pass-verify /etc/openvpn/auth.sh via-file
+script-security 2
+```
+
+## Performance options
+
+### sndbuf / rcvbuf
+
+Set socket buffer sizes.
+
+```conf
+sndbuf 393216  # Send buffer (384 KB)
+rcvbuf 393216  # Receive buffer (384 KB)
+```
+
+### mssfix
+
+Limit TCP packet size to prevent fragmentation.
+
+```conf
+mssfix 1400  # Maximum segment size
+```
+
+### fragment
+
+Internal fragmentation (UDP only).
+
+```conf
+fragment 1400
+```
+
+### disable-dco
+
+Disable Data Channel Offload.
+
+```conf
+disable-dco  # Use traditional TUN/TAP instead of kernel offload
+```
+
+## Firewall and NAT options
+
+### connect-freq / connect-freq-initial
+
+Rate limit new connections (DoS protection).
+
+```conf
+# Allow max 10 connections per 60 seconds
+connect-freq 10 60
+
+# Initial connection rate limit (UDP)
+connect-freq-initial 100 10
+```
+
+## IPv6 options
+
+### server-ipv6
+
+Enable IPv6 server mode.
+
+```conf
+server-ipv6 fd00:1234:5678::/64
+```
+
+### ifconfig-ipv6
+
+Configure IPv6 tunnel endpoints.
+
+```conf
+ifconfig-ipv6 fd00::1/64 fd00::2
+```
+
+### ifconfig-ipv6-push
+
+Push IPv6 address to client.
+
+```conf
+ifconfig-ipv6-push fd00::100/64 fd00::1
+```
+
+### route-ipv6
+
+Add IPv6 route.
+
+```conf
+route-ipv6 2001:db8::/32
+push "route-ipv6 2001:db8::/32"
+```
+
+## Management interface
+
+### management
+
+Enable management interface.
+
+```conf
+# TCP socket
+management localhost 7505
+
+# Unix socket
+management /var/run/openvpn-mgmt.sock unix
+```
+
+## Compatibility options
+
+### compat-mode
+
+Enable compatibility with older versions.
+
+```conf
+compat-mode 2.4.0  # Behave like OpenVPN 2.4.0
+```
+
+<Warning>
+Only use `compat-mode` when absolutely necessary, as it may reduce security or disable features.
+</Warning>
+
+### ignore-unknown-option
+
+Ignore unrecognized options.
+
+```conf
+ignore-unknown-option dns
+ignore-unknown-option dns server
+```
+
+## Platform-specific options
+
+### chroot (Linux/Unix)
+
+Change root directory after init.
+
+```conf
+chroot /var/empty
+```
+
+### setcon (Linux with SELinux)
+
+Set SELinux context.
+
+```conf
+setcon system_u:system_r:openvpn_t:s0
+```
+
+### iproute (Linux)
+
+Specify alternative iproute2 command.
+
+```conf
+iproute /usr/local/bin/ip
+```
+
+## Examples by use case
+
+### Minimal client
+
+```conf
+client
+remote vpn.example.com 1194
+dev tun
+proto udp
+ca ca.crt
+cert client.crt
+key client.key
+remote-cert-tls server
+nobind
+resolv-retry infinite
+persist-tun
+verb 3
+```
+
+### Minimal server
+
+```conf
+port 1194
+proto udp
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+server 10.8.0.0 255.255.255.0
+topology subnet
+keepalive 10 120
+persist-tun
+status openvpn-status.log
+verb 3
+```
+
+### High-security configuration
+
+```conf
+data-ciphers AES-256-GCM:CHACHA20-POLY1305
+auth SHA512
+tls-version-min 1.3
+tls-auth ta.key 0
+remote-cert-tls client
+verify-client-cert require
+```
+
+### Performance-optimized
+
+```conf
+sndbuf 393216
+rcvbuf 393216
+mssfix 1400
+fast-io
+# DCO enabled by default in 2.6+
+```
+
+## Next steps
+
+- [Configuration overview](/configuration/overview) - File format and structure
+- [Client setup guide](/configuration/client-setup) - Configure OpenVPN clients
+- [Server setup guide](/configuration/server-setup) - Configure OpenVPN servers

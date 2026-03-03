@@ -1,80 +1,719 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start guide
+description: Get your first OpenVPN connection up and running in minutes with this step-by-step guide using real configuration examples.
 ---
 
-## Get started in three steps
+# Quick start guide
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through setting up a basic OpenVPN server and client connection using SSL/TLS authentication. You'll have a working VPN in minutes.
 
-### Step 1: Set up your local environment
+<Note>
+  This guide assumes you have already [installed OpenVPN](/installation) on both the server and client machines.
+</Note>
+
+## Overview
+
+We'll set up a routed VPN (TUN mode) with the following configuration:
+
+- **Protocol**: UDP on port 1194
+- **Network**: 10.8.0.0/24 subnet
+- **Security**: SSL/TLS with certificates
+- **Topology**: Subnet (recommended)
+
+## Setup process
+
+<Steps>
+  <Step title="Set up the Certificate Authority">
+    First, we need to create certificates for authentication. Install and initialize Easy-RSA:
+
+    ```bash
+    # Clone Easy-RSA
+    git clone https://github.com/OpenVPN/easy-rsa
+    cd easy-rsa/easyrsa3
+
+    # Initialize PKI
+    ./easyrsa init-pki
+    ```
+
+    Create the Certificate Authority:
+
+    ```bash
+    ./easyrsa build-ca
+    ```
+
+    You'll be prompted for a CA password and Common Name. For testing, you can use simple values.
+
+    <Warning>
+      Keep the CA key (`pki/private/ca.key`) secure and never share it. This is the root of your PKI security.
+    </Warning>
+  </Step>
+
+  <Step title="Generate server certificate and key">
+    Create the server certificate:
+
+    ```bash
+    ./easyrsa build-server-full server nopass
+    ```
+
+    Generate Diffie-Hellman parameters (this may take several minutes):
+
+    ```bash
+    ./easyrsa gen-dh
+    ```
+
+    Optionally, generate an HMAC signature for additional security:
+
+    ```bash
+    openvpn --genkey secret pki/ta.key
+    ```
+
+    <Info>
+      The `nopass` option creates a key without a password. For production, consider using a password and systemd to manage it securely.
+    </Info>
+  </Step>
+
+  <Step title="Generate client certificate and key">
+    Create a certificate for your first client:
+
+    ```bash
+    ./easyrsa build-client-full client1 nopass
+    ```
+
+    Repeat this step for each client that needs access, using unique names (client2, client3, etc.).
+
+    <Tip>
+      Each client should have its own unique certificate for better security and revocation management.
+    </Tip>
+  </Step>
+
+  <Step title="Create server configuration">
+    Copy the certificates to your OpenVPN directory:
+
+    ```bash
+    sudo mkdir -p /etc/openvpn/server
+    sudo cp pki/ca.crt /etc/openvpn/server/
+    sudo cp pki/issued/server.crt /etc/openvpn/server/
+    sudo cp pki/private/server.key /etc/openvpn/server/
+    sudo cp pki/dh.pem /etc/openvpn/server/
+    sudo cp pki/ta.key /etc/openvpn/server/  # if you created it
+    ```
+
+    Create the server configuration file `/etc/openvpn/server/server.conf`:
+
+    ```conf
+    # Listen on UDP port 1194
+    port 1194
+    proto udp
+
+    # Create a routed IP tunnel
+    dev tun
+
+    # SSL/TLS certificates and keys
+    ca ca.crt
+    cert server.crt
+    key server.key
+    dh dh.pem
+
+    # Network topology
+    topology subnet
+
+    # VPN subnet - server will use 10.8.0.1
+    server 10.8.0.0 255.255.255.0
+
+    # Maintain client IP associations
+    ifconfig-pool-persist /var/log/openvpn/ipp.txt
+
+    # Keepalive ping
+    keepalive 10 120
+
+    # Persist across restarts
+    persist-tun
+
+    # Status log
+    status /var/log/openvpn/openvpn-status.log
+
+    # Verbosity level
+    verb 3
+
+    # Notify clients when restarting
+    explicit-exit-notify 1
+    ```
+
+    <Note>
+      This is a minimal production-ready configuration based on the official sample configuration.
+    </Note>
+  </Step>
+
+  <Step title="Configure the server system">
+    Enable IP forwarding:
+
+    ```bash
+    # Temporary (until reboot)
+    echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
+
+    # Permanent
+    echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf
+    sudo sysctl -p
+    ```
+
+    Create log directory:
+
+    ```bash
+    sudo mkdir -p /var/log/openvpn
+    ```
+
+    Configure firewall to allow OpenVPN traffic:
+
+    ```bash
+    # UFW (Ubuntu/Debian)
+    sudo ufw allow 1194/udp
+
+    # firewalld (RHEL/CentOS/Fedora)
+    sudo firewall-cmd --add-service=openvpn --permanent
+    sudo firewall-cmd --reload
+    ```
+
+    <Warning>
+      Make sure your cloud provider's security group or firewall also allows UDP port 1194.
+    </Warning>
+  </Step>
+
+  <Step title="Start the OpenVPN server">
+    <Tabs>
+      <Tab title="Systemd (recommended)">
+        Enable and start the service:
+
+        ```bash
+        sudo systemctl enable openvpn-server@server
+        sudo systemctl start openvpn-server@server
+        ```
+
+        Check status:
+
+        ```bash
+        sudo systemctl status openvpn-server@server
+        ```
+
+        View logs:
+
+        ```bash
+        sudo journalctl -u openvpn-server@server -f
+        ```
+      </Tab>
+      <Tab title="Manual start">
+        Run in foreground for testing:
+
+        ```bash
+        sudo openvpn --config /etc/openvpn/server/server.conf
+        ```
+
+        Expected output:
+
+        ```
+        Initialization Sequence Completed
+        ```
+      </Tab>
+    </Tabs>
+
+    Verify the TUN interface was created:
+
+    ```bash
+    ip addr show tun0
+    ```
+
+    You should see an interface with IP 10.8.0.1.
+  </Step>
+
+  <Step title="Create client configuration">
+    On the client machine, create a directory for OpenVPN:
+
+    ```bash
+    mkdir -p ~/openvpn-client
+    cd ~/openvpn-client
+    ```
+
+    Copy the following files from the server:
+    - `pki/ca.crt`
+    - `pki/issued/client1.crt`
+    - `pki/private/client1.key`
+    - `pki/ta.key` (if you created it)
+
+    Create the client configuration file `client.conf`:
+
+    ```conf
+    # Specify that we are a client
+    client
+
+    # Use the same settings as the server
+    dev tun
+    proto udp
+
+    # Server hostname/IP and port
+    remote your-server-ip-or-hostname 1194
+
+    # Keep trying to resolve the server
+    resolv-retry infinite
+
+    # Don't bind to a specific local port
+    nobind
+
+    # Persist across restarts
+    persist-tun
+
+    # SSL/TLS certificates and keys
+    ca ca.crt
+    cert client1.crt
+    key client1.key
+
+    # Verify server certificate
+    remote-cert-tls server
+
+    # Verbosity level
+    verb 3
+    ```
+
+    <Info>
+      Replace `your-server-ip-or-hostname` with your actual server's IP address or domain name.
+    </Info>
+  </Step>
+
+  <Step title="Connect the client">
+    Connect to the VPN:
+
+    ```bash
+    sudo openvpn --config client.conf
+    ```
+
+    Successful connection output:
+
+    ```
+    Initialization Sequence Completed
+    ```
+
+    Verify the connection:
+
+    ```bash
+    # Check the TUN interface
+    ip addr show tun0
+
+    # Test connectivity to the server
+    ping 10.8.0.1
+    ```
+
+    <Tip>
+      On macOS and Windows, you may see different interface names (e.g., utun0 on macOS).
+    </Tip>
+  </Step>
+
+  <Step title="Verify the VPN is working">
+    Check connected clients on the server:
+
+    ```bash
+    sudo cat /var/log/openvpn/openvpn-status.log
+    ```
+
+    Output shows connected clients:
+
+    ```
+    CLIENT_LIST,client1,10.8.0.2,192.168.1.100:54321,2024-03-03 10:30:00
+    ROUTING_TABLE,10.8.0.2,client1,192.168.1.100:54321,2024-03-03 10:30:00
+    ```
+
+    From the client, test internet connectivity through the VPN:
+
+    ```bash
+    traceroute 8.8.8.8
+    ```
+
+    The first hop should be 10.8.0.1 (the VPN server).
+  </Step>
+</Steps>
+
+## Advanced configuration options
+
+Enhance your VPN with these common configuration options:
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Route all client traffic through VPN">
+    Add to server configuration:
+
+    ```conf
+    # Redirect all client traffic through VPN
+    push "redirect-gateway def1 bypass-dhcp"
+
+    # Push DNS servers to clients
+    push "dhcp-option DNS 8.8.8.8"
+    push "dhcp-option DNS 8.8.4.4"
+    ```
+
+    Configure NAT on the server:
+
+    ```bash
+    # Replace eth0 with your server's internet interface
+    sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+    ```
+
+    <Warning>
+      Make sure to save iptables rules to persist across reboots.
+    </Warning>
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Allow client-to-client communication">
+    Add to server configuration:
+
+    ```conf
+    # Allow clients to see each other
+    client-to-client
+    ```
+
+    Restart the server to apply changes:
+
+    ```bash
+    sudo systemctl restart openvpn-server@server
+    ```
+  </Accordion>
+
+  <Accordion title="Add HMAC authentication (tls-auth)">
+    If you generated a `ta.key` file, add to server configuration:
+
+    ```conf
+    tls-auth ta.key 0
+    ```
+
+    Add to client configuration:
+
+    ```conf
+    tls-auth ta.key 1
+    ```
+
+    <Info>
+      The server uses parameter 0, clients use parameter 1. This adds an HMAC signature to prevent DoS attacks.
+    </Info>
+  </Accordion>
+
+  <Accordion title="Use TCP instead of UDP">
+    Change in both server and client configurations:
+
+    ```conf
+    proto tcp-server  # on server
+    proto tcp-client  # on client
+    ```
+
+    Update firewall:
+
+    ```bash
+    sudo ufw allow 1194/tcp
+    ```
+
+    <Note>
+      TCP is more reliable but has higher overhead than UDP. Use it when UDP is blocked or unreliable.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Drop privileges after startup">
+    Add to server configuration (Linux only):
+
+    ```conf
+    user openvpn
+    group openvpn
+    ```
+
+    Create the user:
+
+    ```bash
+    sudo useradd -r -s /usr/sbin/nologin openvpn
+    ```
+
+    <Tip>
+      Dropping privileges improves security by limiting what the OpenVPN process can do if compromised.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Assign static IPs to specific clients">
+    Create client config directory:
+
+    ```bash
+    sudo mkdir -p /etc/openvpn/server/ccd
+    ```
+
+    Add to server configuration:
+
+    ```conf
+    client-config-dir ccd
+    ```
+
+    Create a file `/etc/openvpn/server/ccd/client1`:
+
+    ```conf
+    ifconfig-push 10.8.0.10 255.255.255.0
+    ```
+
+    This assigns 10.8.0.10 to the client named "client1".
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+## Configuration reference
+
+Here's the complete server configuration from the official sample with all options:
+
+<CodeGroup>
+```conf server.conf
+# Multi-client server configuration
+port 1194
+proto udp
+dev tun
+
+# SSL/TLS certificates
+ca ca.crt
+cert server.crt
+key server.key
+
+# Network topology (recommended)
+topology subnet
+
+# VPN subnet configuration
+server 10.8.0.0 255.255.255.0
+
+# Maintain client IP associations
+ifconfig-pool-persist ipp.txt
+
+# Push routes to clients for internal networks
+;push "route 192.168.10.0 255.255.255.0"
+;push "route 192.168.20.0 255.255.255.0"
+
+# Redirect all client traffic through VPN
+;push "redirect-gateway def1 bypass-dhcp"
+
+# Push DNS servers to clients
+;push "dhcp-option DNS 208.67.222.222"
+;push "dhcp-option DNS 208.67.220.220"
+
+# Allow clients to see each other
+;client-to-client
+
+# Keepalive configuration
+keepalive 10 120
+
+# HMAC authentication
+;tls-auth ta.key 0
+
+# Maximum concurrent clients
+;max-clients 100
+
+# Drop privileges (non-Windows)
+;user openvpn
+;group openvpn
+
+# Persist across restarts
+persist-tun
+
+# Status log
+status openvpn-status.log
+
+# Verbosity level (0-9)
+verb 3
+
+# Notify clients on restart
+explicit-exit-notify 1
+```
+
+```conf client.conf
+# Client configuration
+client
+
+# Network settings
+dev tun
+proto udp
+
+# Server address and port
+remote my-server-1 1194
+;remote my-server-2 1194
+
+# Keep trying to resolve server
+resolv-retry infinite
+
+# Don't bind to local port
+nobind
+
+# Drop privileges (non-Windows)
+;user openvpn
+;group openvpn
+
+# Persist across restarts
+persist-tun
+
+# SSL/TLS certificates
+ca ca.crt
+cert client.crt
+key client.key
+
+# Verify server certificate
+remote-cert-tls server
+
+# HMAC authentication
+;tls-auth ta.key 1
+
+# Verbosity level
+verb 3
+```
+</CodeGroup>
+
+## Platform-specific notes
+
+<Tabs>
+  <Tab title="Windows">
+    ### Windows client setup
+
+    1. Install OpenVPN from [openvpn.net/community-downloads/](https://openvpn.net/community-downloads/)
+    2. Place your configuration and certificates in:
+       ```
+       C:\Program Files\OpenVPN\config\
+       ```
+    3. Rename your config file to `client.ovpn`
+    4. Right-click the OpenVPN GUI icon and select "Run as administrator"
+    5. Right-click the system tray icon and select "Connect"
+
+    <Note>
+      Windows may show a warning about the TAP adapter. Allow it through Windows Firewall.
+    </Note>
+  </Tab>
+
+  <Tab title="macOS">
+    ### macOS client setup
+
+    Use Tunnelblick (open source GUI) or command line:
+
+    ```bash
+    brew install openvpn
+    sudo openvpn --config client.conf
+    ```
+
+    The interface will be named `utun0` (or similar) instead of `tun0`.
+  </Tab>
+
+  <Tab title="Mobile">
+    ### Android and iOS
+
+    1. Install the OpenVPN Connect app from the app store
+    2. Create a unified `.ovpn` profile file with inline certificates:
+
+    ```ovpn
+    client
+    dev tun
+    proto udp
+    remote your-server-ip 1194
+    resolv-retry infinite
+    nobind
+    persist-tun
+    remote-cert-tls server
+    verb 3
+
+    <ca>
+    -----BEGIN CERTIFICATE-----
+    [paste contents of ca.crt]
+    -----END CERTIFICATE-----
+    </ca>
+
+    <cert>
+    -----BEGIN CERTIFICATE-----
+    [paste contents of client.crt]
+    -----END CERTIFICATE-----
+    </cert>
+
+    <key>
+    -----BEGIN PRIVATE KEY-----
+    [paste contents of client.key]
+    -----END PRIVATE KEY-----
+    </key>
+    ```
+
+    3. Import the `.ovpn` file into the app
+  </Tab>
+</Tabs>
+
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+  <Accordion title="Connection timeout">
+    Check that the server is running:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```bash
+    sudo systemctl status openvpn-server@server
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
+    Verify firewall allows UDP 1194:
+
+    ```bash
+    sudo ufw status
+    sudo netstat -uln | grep 1194
+    ```
+
+    Check cloud provider security groups allow inbound UDP 1194.
+  </Accordion>
+
+  <Accordion title="TLS handshake failed">
+    This usually indicates certificate problems:
+
+    ```bash
+    # Verify certificate validity
+    openssl x509 -in ca.crt -text -noout
+    openssl x509 -in server.crt -text -noout
+    openssl x509 -in client.crt -text -noout
+    ```
+
+    Ensure the client cert was signed by the same CA as the server cert.
+  </Accordion>
+
+  <Accordion title="Can connect but no internet access">
+    Verify IP forwarding is enabled:
+
+    ```bash
+    cat /proc/sys/net/ipv4/ip_forward
+    ```
+
+    Should output `1`. If not:
+
+    ```bash
+    sudo sysctl -w net.ipv4.ip_forward=1
+    ```
+
+    Check NAT rules:
+
+    ```bash
+    sudo iptables -t nat -L POSTROUTING -v
+    ```
+  </Accordion>
+
+  <Accordion title="Permission denied errors">
+    OpenVPN needs root/admin privileges:
+
+    ```bash
+    # Linux/macOS
+    sudo openvpn --config client.conf
+
+    # Windows
+    # Run OpenVPN GUI as Administrator
+    ```
   </Accordion>
 </AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Certificate management" icon="certificate">
+    Learn to revoke certificates, renew expired certs, and manage your PKI
+  </Card>
+  <Card title="Advanced configurations" icon="sliders">
+    Explore site-to-site VPNs, bridged mode, and load balancing
+  </Card>
+  <Card title="Security hardening" icon="shield">
+    Implement TLS-crypt, stronger ciphers, and security best practices
+  </Card>
+  <Card title="Monitoring" icon="chart-line">
+    Set up logging, monitoring, and alerting for your VPN infrastructure
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+<Tip>
+  For production deployments, consider using configuration management tools like Ansible or Terraform to automate OpenVPN deployment and certificate management.
+</Tip>

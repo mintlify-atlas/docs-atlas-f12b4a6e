@@ -1,0 +1,161 @@
+---
+title: Command line overview
+description: Overview of OpenVPN command line usage, configuration files, and basic syntax
+---
+
+## Synopsis
+
+```bash
+openvpn [options ...]
+openvpn --help
+```
+
+## Introduction
+
+OpenVPN is an open source VPN daemon by James Yonan. Because OpenVPN tries to be a universal VPN tool offering a great deal of flexibility, there are a lot of options available. If you're new to OpenVPN, you might want to skip ahead to the examples section where you will see how to construct simple VPNs on the command line without even needing a configuration file.
+
+For more documentation and examples, visit the OpenVPN website at https://openvpn.net/
+
+## Description
+
+OpenVPN is a robust and highly flexible VPN daemon with the following capabilities:
+
+- SSL/TLS security
+- Ethernet bridging
+- TCP or UDP tunnel transport through proxies or NAT
+- Support for dynamic IP addresses and DHCP
+- Scalability to hundreds or thousands of users
+- Portability to most major OS platforms
+
+OpenVPN is tightly bound to the OpenSSL library, and derives much of its crypto capabilities from it.
+
+<Note>
+OpenVPN supports conventional encryption using a pre-shared secret key (Static Key mode) or public key security (SSL/TLS mode) using client & server certificates. OpenVPN also supports non-encrypted TCP/UDP tunnels.
+</Note>
+
+OpenVPN is designed to work with the **TUN/TAP** virtual networking interface that exists on most platforms.
+
+## Configuration files
+
+OpenVPN allows any option to be placed either on the command line or in a configuration file. Though all command line options are preceded by a double-leading-dash (`--`), this prefix can be removed when an option is placed in a configuration file.
+
+### Using configuration files
+
+Load configuration options from a file:
+
+```bash
+openvpn --config file
+```
+
+If `--config file` is the only option, the `--config` can be removed:
+
+```bash
+openvpn file
+```
+
+<Note>
+Configuration files can be nested to a reasonable depth.
+</Note>
+
+### Configuration file syntax
+
+- Each line corresponds to one command line option, with the leading `--` removed
+- Double or single quotation characters (`""`, `''`) can enclose parameters containing whitespace
+- `#` or `;` characters in the first column denote comments
+- OpenVPN 2.0 and higher performs backslash-based shell escaping for characters not in single quotations
+
+<Accordion title="Backslash escaping mappings">
+
+```
+\\       Maps to a single backslash character (\)
+\"       Pass a literal doublequote character ("), don't interpret it
+\[SPACE] Pass a literal space or tab character, don't interpret as delimiter
+```
+
+</Accordion>
+
+### Example configuration file
+
+```bash
+#
+# Sample OpenVPN configuration file for
+# using a pre-shared static key.
+#
+# '#' or ';' may be used to delimit comments.
+
+# Use a dynamic tun device.
+dev tun
+
+# Our remote peer
+remote mypeer.mydomain
+
+# 10.1.0.1 is our local VPN endpoint
+# 10.1.0.2 is our remote VPN endpoint
+ifconfig 10.1.0.1 10.1.0.2
+
+# Our pre-shared static key
+secret static.key
+```
+
+### Windows path syntax
+
+On Windows, use double backslashes to represent pathnames:
+
+```bash
+secret "c:\\OpenVPN\\secret.key"
+```
+
+## Option categories
+
+OpenVPN options are organized into several categories:
+
+- **Generic options** - Available regardless of which mode OpenVPN is configured in
+- **Client options** - Used when connecting to an OpenVPN server
+- **Server options** - Used when running OpenVPN in server mode
+- **Log options** - Control logging and status output
+- **Protocol options** - Configure protocol behavior
+- **Encryption options** - Configure cryptographic settings
+- **Network configuration** - Configure network interfaces and routing
+- **Script options** - Execute external scripts at various points
+- **Management options** - Enable management interface
+- **Plugin options** - Load external plugins
+
+## Getting help
+
+Show all available options:
+
+```bash
+openvpn --help
+```
+
+View the full manual page:
+
+```bash
+man openvpn
+```
+
+## Resources
+
+<CardGroup cols={2}>
+
+<Card title="FAQ" icon="question" href="https://community.openvpn.net/openvpn/wiki/FAQ">
+  Frequently asked questions about OpenVPN
+</Card>
+
+<Card title="HOWTO" icon="book" href="https://openvpn.net/community-resources/how-to/">
+  Comprehensive guide to setting up OpenVPN in production
+</Card>
+
+<Card title="Protocol" icon="code" href="https://github.com/openvpn/openvpn-rfc">
+  OpenVPN protocol documentation
+</Card>
+
+<Card title="Community" icon="users" href="https://community.openvpn.net/">
+  Download, mailing lists, and Git repository
+</Card>
+
+</CardGroup>
+
+## Copyright
+
+Copyright (C) 2002-2025 OpenVPN Inc. This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License version 2 as published by the Free Software Foundation.

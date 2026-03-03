@@ -1,0 +1,232 @@
+---
+title: Code style guidelines
+description: Formatting and style requirements for OpenVPN code contributions
+---
+
+OpenVPN follows specific code formatting guidelines to maintain consistency across the codebase. All contributions must adhere to these standards.
+
+## Formatting with clang-format
+
+OpenVPN uses `clang-format` for automated code formatting. The configuration is stored in the `.clang-format` file in the repository root.
+
+<Info>
+  Always run clang-format on your code before submitting patches. This ensures consistent formatting and speeds up the review process.
+</Info>
+
+### Installing clang-format
+
+Install clang-format using your system's package manager:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install clang-format
+
+# macOS
+brew install clang-format
+
+# Fedora/RHEL
+sudo dnf install clang-tools-extra
+```
+
+### Using clang-format
+
+Format a single file:
+
+```bash
+clang-format -i path/to/file.c
+```
+
+Format multiple files:
+
+```bash
+find src/ -name '*.c' -o -name '*.h' | xargs clang-format -i
+```
+
+### Pre-commit hook
+
+OpenVPN provides a git pre-commit hook that automatically runs clang-format each time you commit. This is the recommended approach to ensure your code is always properly formatted.
+
+**Install the pre-commit hook:**
+
+```bash
+dev-tools/git-pre-commit-format.sh install
+```
+
+The hook will:
+- Automatically check formatting when you commit
+- Allow you to format your code conveniently if needed
+- Prevent commits with incorrect formatting
+
+## Style configuration
+
+The OpenVPN `.clang-format` configuration is based on the Mozilla style with customizations:
+
+### Key formatting rules
+
+<CardGroup cols={2}>
+  <Card title="Base style" icon="paintbrush">
+    Mozilla style with OpenVPN-specific customizations
+  </Card>
+  
+  <Card title="Indentation" icon="indent">
+    4 spaces (no tabs), indent case labels
+  </Card>
+  
+  <Card title="Braces" icon="brackets-curly">
+    Allman style - braces on new lines
+  </Card>
+  
+  <Card title="Line length" icon="ruler-horizontal">
+    No column limit (0)
+  </Card>
+</CardGroup>
+
+### Detailed configuration
+
+The `.clang-format` file specifies:
+
+**Alignment:**
+- Align consecutive macros across comments
+- Align trailing comments (allow 1 empty line)
+- Align operands and escaped newlines
+- Align parameters after open brackets
+
+**Spacing:**
+- 2 spaces before trailing comments
+- Space before parentheses in control statements
+- Space before assignment operators
+- No space after C-style casts
+
+**Breaking:**
+- Break before binary operators (non-assignment)
+- Break before ternary operators
+- Break after return type in all definitions
+- Allman brace style (braces on new lines)
+
+**Indentation:**
+- 4 spaces for indentation
+- 4 spaces for continuation
+- Indent case labels
+- Do not indent goto labels
+- Do not indent wrapped function names
+
+**Functions and blocks:**
+- No short functions on single line
+- No short if statements on single line
+- No short loops on single line
+- No short blocks on single line
+- Insert braces around control statements
+
+**Pointers and references:**
+- Pointer alignment: Right (e.g., `int *ptr`)
+- Do not derive pointer alignment from context
+
+**Other:**
+- Keep maximum 2 empty lines
+- Do not keep empty lines at start of blocks
+- Reflow comments for readability
+- Do not sort includes (preserve order)
+- Do not break string literals
+
+## Complete configuration
+
+The full `.clang-format` configuration:
+
+```yaml
+---
+BasedOnStyle: Mozilla
+AccessModifierOffset: '-4'
+AlignAfterOpenBracket: Align
+AlignConsecutiveMacros:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: true
+AlignEscapedNewlines: Left
+AlignOperands: true
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 1
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: true
+BinPackParameters: true
+BreakAfterReturnType: AllDefinitions
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeBraces: Allman
+BreakBeforeTernaryOperators: true
+BreakStringLiterals: false
+ColumnLimit: '0'
+ContinuationIndentWidth: '4'
+DerivePointerAlignment: false
+IndentCaseLabels: true
+IndentGotoLabels: false
+IndentWidth: '4'
+IndentWrappedFunctionNames: false
+InsertBraces: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: '2'
+PointerAlignment: Right
+ReflowComments: true
+SortIncludes: false
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpacesBeforeTrailingComments: '2'
+SpacesInParens: Never
+TabWidth: '4'
+TypeNames: [DWORD]
+UseTab: Never
+WhitespaceSensitiveMacros: [_STRINGIFY]
+---
+Language: C
+---
+Language: Cpp
+```
+
+## Before submitting
+
+<Steps>
+  <Step title="Install the pre-commit hook">
+    Run `dev-tools/git-pre-commit-format.sh install` to automatically format code on commit.
+  </Step>
+  
+  <Step title="Format your code">
+    Run clang-format on all modified files before creating patches.
+  </Step>
+  
+  <Step title="Verify formatting">
+    Review the changes to ensure formatting looks correct and doesn't change logic.
+  </Step>
+  
+  <Step title="Submit your patch">
+    Send your properly formatted patch to the mailing list or Gerrit.
+  </Step>
+</Steps>
+
+<Note>
+  Patches that don't follow the code style guidelines may be rejected during review. Using the pre-commit hook is the easiest way to ensure compliance.
+</Note>
+
+## Additional resources
+
+<CardGroup cols={2}>
+  <Card title="Code style wiki" icon="book" href="https://community.openvpn.net/Development/CodeStyle">
+    Official code style documentation on the community wiki
+  </Card>
+  
+  <Card title="Contributing guide" icon="code-branch" href="/community/contributing">
+    Learn how to contribute patches to OpenVPN
+  </Card>
+  
+  <Card title="Developer docs" icon="file-code" href="https://community.openvpn.net/Development/DeveloperDocumentation">
+    Comprehensive developer documentation
+  </Card>
+  
+  <Card title="Community overview" icon="users" href="/community/overview">
+    Connect with the OpenVPN community
+  </Card>
+</CardGroup>

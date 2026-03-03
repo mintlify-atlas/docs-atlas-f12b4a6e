@@ -1,0 +1,468 @@
+---
+title: Network configuration options
+description: Configure network settings, routing, and virtual network adapters for OpenVPN
+---
+
+OpenVPN consists of two sides of network configuration. One side is the link between the local and remote side, the other side is the virtual network adapter (tun/tap device).
+
+## Link options
+
+This section covers options related to the connection between the local and the remote host.
+
+<ParamField path="--proto" type="string">
+  Use protocol for communicating with remote host.
+  
+  **Valid values:**
+  - `udp` (default)
+  - `tcp-client`
+  - `tcp-server`
+  - `udp4`, `tcp4-client`, `tcp4-server` (IPv4 only)
+  - `udp6`, `tcp6-client`, `tcp6-server` (IPv6 only)
+  
+  For UDP operation, `--proto udp` should be specified on both peers.
+  
+  For TCP operation, one peer must use `--proto tcp-server` and the other must use `--proto tcp-client`. A peer started with `tcp-server` will wait indefinitely for an incoming connection. A peer started with `tcp-client` will attempt to connect, and if that fails, will sleep for 5 seconds and try again.
+  
+  <Note>
+  OpenVPN is designed to operate optimally over UDP, but TCP capability is provided for situations where UDP cannot be used. In comparison with UDP, TCP will usually be somewhat less efficient and less robust when used over unreliable or congested networks.
+  </Note>
+</ParamField>
+
+<ParamField path="--port" type="number">
+  TCP/UDP port number or port name for both local and remote (sets both `--lport` and `--rport` options to given port).
+  
+  The current default of 1194 represents the official IANA port number assignment for OpenVPN.
+</ParamField>
+
+<ParamField path="--lport" type="number">
+  Set local TCP/UDP port number. Cannot be used together with `--nobind` option.
+  
+  A port number of `0` is only honored to achieve "bind() to a random assigned port number" if a bind-to IP address is specified with `--local`.
+</ParamField>
+
+<ParamField path="--rport" type="number">
+  Set TCP/UDP port number or name used by the `--remote` option. The port can also be set directly using the `--remote` option.
+</ParamField>
+
+<ParamField path="--local" type="string">
+  Local host name or IP address and port for bind.
+  
+  **Syntax:**
+  ```
+  local host|* [port] [protocol]
+  ```
+  
+  If specified, OpenVPN will bind to this address. If unspecified, OpenVPN will bind to all interfaces. `*` can be used as hostname and means 'any host' (OpenVPN will listen on what is returned by the OS).
+  
+  On an OpenVPN setup running as `--server`, this can be specified multiple times to open multiple listening sockets on different addresses and/or different ports.
+  
+  <Note>
+  `--local` implies `--bind`.
+  </Note>
+</ParamField>
+
+<ParamField path="--bind" type="string">
+  Bind to local address and port. This is the default unless any of `--proto tcp-client`, `--http-proxy` or `--socks-proxy` are used.
+  
+  If the optional `ipv6only` keyword is present, OpenVPN will bind only to IPv6 (as opposed to IPv6 and IPv4) when a IPv6 socket is opened.
+</ParamField>
+
+<ParamField path="--nobind" type="boolean">
+  Do not bind to local address and port. The IP stack will allocate a dynamic port for returning packets.
+  
+  <Warning>
+  Since the value of the dynamic port could not be known in advance by a peer, this option is only suitable for peers which will be initiating connections by using the `--remote` option.
+  </Warning>
+</ParamField>
+
+<ParamField path="--float" type="boolean">
+  Allow remote peer to change its IP address and/or port number, such as due to DHCP (this is the default if `--remote` is not used).
+  
+  When specified with `--remote`, allows an OpenVPN session to initially connect to a peer at a known address, however if packets arrive from a new address and pass all authentication tests, the new address will take control of the session.
+  
+  <Note>
+  This is useful when connecting to a peer which holds a dynamic address such as a dial-in user or DHCP client.
+  </Note>
+</ParamField>
+
+<ParamField path="--keepalive" type="string">
+  A helper directive designed to simplify the expression of `--ping` and `--ping-restart`.
+  
+  **Syntax:**
+  ```
+  keepalive interval timeout
+  ```
+  
+  Send ping once every `interval` seconds, restart if ping is not received for `timeout` seconds.
+  
+  This option can be used on both client and server side, but it is enough to add this on the server side as it will push appropriate `--ping` and `--ping-restart` options to the client.
+  
+  **Example:**
+  ```
+  keepalive 10 60
+  ```
+  
+  This expands on the server to:
+  ```
+  ping 10
+  ping-restart 120
+  push "ping 10"
+  push "ping-restart 60"
+  ```
+</ParamField>
+
+<ParamField path="--ping" type="number">
+  Ping remote over the TCP/UDP control channel if no packets have been sent for at least n seconds.
+  
+  This option has two intended uses:
+  1. Compatibility with stateful firewalls. The periodic ping will ensure that a stateful firewall rule which allows OpenVPN UDP packets to pass will not time out.
+  2. To provide a basis for the remote to test the existence of its peer using the `--ping-exit` option.
+</ParamField>
+
+<ParamField path="--ping-restart" type="number">
+  Similar to `--ping-exit`, but trigger a SIGUSR1 restart after n seconds pass without reception of a ping or other packet from remote.
+  
+  This option is useful in cases where the remote peer has a dynamic IP address and a low-TTL DNS name is used to track the IP address.
+  
+  <Note>
+  In client mode, the `--ping-restart` parameter is set to 120 seconds by default. This default will hold until the client pulls a replacement value from the server, based on the `--keepalive` setting in the server configuration.
+  </Note>
+</ParamField>
+
+<ParamField path="--mssfix" type="number">
+  Announce to TCP sessions running over the tunnel that they should limit their send packet sizes.
+  
+  **Syntax:**
+  ```
+  mssfix max [mtu]
+  mssfix max [fixed]
+  mssfix
+  ```
+  
+  The default value is `1492 mtu`. Use `0` as max to disable mssfix.
+  
+  If the `mtu` parameter is specified, the `max` value is interpreted as the resulting packet size of VPN packets including the IP and UDP header.
+  
+  If the `fixed` parameter is specified, OpenVPN will make no attempt to calculate the VPN encapsulation overhead but instead will set the MSS to limit the size of the payload IP packets to the specified number.
+  
+  <Note>
+  The `--mssfix` option only makes sense when you are using the UDP protocol for OpenVPN peer-to-peer communication.
+  </Note>
+</ParamField>
+
+<ParamField path="--fragment" type="number">
+  Enable internal datagram fragmentation so that no UDP datagrams are sent which are larger than max bytes.
+  
+  **Syntax:**
+  ```
+  fragment max
+  fragment max mtu
+  ```
+  
+  If the `mtu` parameter is present, the `max` parameter is interpreted to include IP and UDP encapsulation overhead.
+  
+  <Warning>
+  The `--fragment` option only makes sense when you are using the UDP protocol (`--proto udp`). This option is not meant to replace UDP fragmentation at the IP stack level. It is only meant as a last resort when path MTU discovery is broken.
+  </Warning>
+</ParamField>
+
+<ParamField path="--max-packet-size" type="number">
+  Instruct OpenVPN to try to limit the maximum on-write packet size by restricting the control channel packet size and setting `--mssfix`.
+  
+  OpenVPN will try to keep its control channel messages below this size. The default is 1250 bytes.
+  
+  The control channel packet size will be restricted to values between 154 and 2048. The maximum packet size includes encapsulation overhead like UDP and IP.
+  
+  <Note>
+  In general the default size of 1250 should work almost universally, especially since IPv6 requires a MTU of 1280 or larger.
+  </Note>
+</ParamField>
+
+<ParamField path="--replay-window" type="string">
+  Modify the replay protection sliding-window size and time window.
+  
+  **Syntax:**
+  ```
+  replay-window n
+  replay-window n t
+  ```
+  
+  Use a replay protection sliding-window of size `n` and a time window of `t` seconds.
+  
+  By default `n` is 64 (the IPSec default) and `t` is 15 seconds.
+  
+  <Note>
+  This option is only relevant in UDP mode.
+  </Note>
+</ParamField>
+
+<ParamField path="--socket-flags" type="string">
+  Apply the given flags to the OpenVPN transport socket. Currently, only `TCP_NODELAY` is supported.
+  
+  The `TCP_NODELAY` socket flag is useful in TCP mode, and causes the kernel to send tunnel packets immediately over the TCP connection without trying to group several smaller packets into a larger packet. This can result in a considerable improvement in latency.
+</ParamField>
+
+<ParamField path="--tcp-nodelay" type="boolean">
+  This macro sets the `TCP_NODELAY` socket flag on the server as well as pushes it to connecting clients.
+  
+  The `TCP_NODELAY` flag disables the Nagle algorithm on TCP sockets causing packets to be transmitted immediately with low latency, rather than waiting a short period of time in order to aggregate several packets into a larger containing packet.
+  
+  <Note>
+  In VPN applications over TCP, `TCP_NODELAY` is generally a good latency optimization.
+  </Note>
+</ParamField>
+
+## Virtual network adapter options
+
+Options in this section relate to configuration of the virtual tun/tap network interface, including setting the VPN IP address and network routing.
+
+<ParamField path="--dev" type="string">
+  TUN/TAP virtual network device which can be `tunX`, `tapX`, `null` or an arbitrary name string (X can be omitted for a dynamic device).
+  
+  You must use either tun devices on both ends of the connection or tap devices on both ends. You cannot mix them:
+  
+  - `tun` devices encapsulate IPv4 or IPv6 (OSI Layer 3)
+  - `tap` devices encapsulate Ethernet 802.3 (OSI Layer 2)
+  
+  **Examples:**
+  ```
+  dev tun2
+  dev tap4
+  dev ovpn
+  ```
+</ParamField>
+
+<ParamField path="--dev-type" type="string">
+  Which device type are we using? Should be `tun` (OSI Layer 3) or `tap` (OSI Layer 2).
+  
+  Use this option only if the TUN/TAP device used with `--dev` does not begin with `tun` or `tap`.
+</ParamField>
+
+<ParamField path="--topology" type="string">
+  Configure virtual addressing topology when running in `--dev tun` mode. This directive has no meaning in `--dev tap` mode, which always uses a `subnet` topology.
+  
+  **Valid values:**
+  
+  - `subnet` (default) - Use a subnet rather than a point-to-point topology
+  - `net30` - Use a point-to-point topology, by allocating one /30 subnet per client
+  - `p2p` - Use a point-to-point topology where the remote endpoint always points to the local endpoint
+  
+  <Note>
+  Using `--topology subnet` changes the interpretation of the arguments of `--ifconfig` to mean "address netmask", and not "local remote".
+  </Note>
+</ParamField>
+
+<ParamField path="--ifconfig" type="string">
+  Set TUN/TAP adapter parameters. It requires the IP address of the local VPN endpoint.
+  
+  For TUN devices in point-to-point mode, the next argument must be the VPN IP address of the remote VPN endpoint.
+  
+  For TAP devices, or TUN devices used with `--topology subnet`, the second argument is the subnet mask of the virtual network segment.
+  
+  **Examples:**
+  ```bash
+  # tun device in net30/p2p mode
+  ifconfig 10.8.0.2 10.8.0.1
+  
+  # tun/tap device in subnet mode
+  ifconfig 10.8.0.2 255.255.255.0
+  ```
+  
+  <Warning>
+  For TAP devices, `--ifconfig` should not be used if the TAP interface will be getting an IP address lease from a DHCP server.
+  </Warning>
+</ParamField>
+
+<ParamField path="--ifconfig-ipv6" type="string">
+  Configure an IPv6 address on the tun device.
+  
+  **Syntax:**
+  ```
+  ifconfig-ipv6 ipv6addr/bits [ipv6remote]
+  ```
+  
+  The `ipv6addr/bits` argument is the IPv6 address to use. The second parameter is used as route target for `--route-ipv6` if no gateway is specified.
+  
+  <Note>
+  The `--topology` option has no influence with `--ifconfig-ipv6`.
+  </Note>
+</ParamField>
+
+<ParamField path="--route" type="string">
+  Add route to routing table after connection is established. Multiple routes can be specified.
+  
+  **Syntax:**
+  ```
+  route network/IP
+  route network/IP netmask
+  route network/IP netmask gateway
+  route network/IP netmask gateway metric
+  ```
+  
+  **Special keywords for gateway:**
+  
+  - `vpn_gateway` - The remote VPN endpoint address
+  - `net_gateway` - The pre-existing IP default gateway
+  - `remote_host` - The `--remote` address if OpenVPN is being run in client mode
+  
+  **Example:**
+  ```
+  route 192.168.10.0 255.255.255.0
+  route 10.0.0.0 255.0.0.0 vpn_gateway
+  ```
+</ParamField>
+
+<ParamField path="--route-ipv6" type="string">
+  Setup IPv6 routing in the system to send the specified IPv6 network into OpenVPN's tun.
+  
+  **Syntax:**
+  ```
+  route-ipv6 ipv6addr/bits
+  route-ipv6 ipv6addr/bits gateway
+  route-ipv6 ipv6addr/bits gateway metric
+  ```
+</ParamField>
+
+<ParamField path="--route-gateway" type="string">
+  Specify a default gateway for use with `--route`.
+  
+  **Syntax:**
+  ```
+  route-gateway gateway
+  route-gateway dhcp
+  ```
+  
+  If `dhcp` is specified as the parameter, the gateway address will be extracted from a DHCP negotiation with the OpenVPN server-side LAN.
+</ParamField>
+
+<ParamField path="--route-metric" type="number">
+  Specify a default metric for use with `--route`.
+</ParamField>
+
+<ParamField path="--route-delay" type="string">
+  Delay n seconds (default 0) after connection establishment, before adding routes.
+  
+  **Syntax:**
+  ```
+  route-delay
+  route-delay n
+  route-delay n w
+  ```
+  
+  If `n` is 0, routes will be added immediately upon connection establishment.
+  
+  <Note>
+  This option is designed to be useful in scenarios where DHCP is used to set tap adapter addresses. The delay will give the DHCP handshake time to complete before routes are added.
+  </Note>
+</ParamField>
+
+<ParamField path="--redirect-gateway" type="string">
+  Automatically execute routing commands to cause all outgoing IP traffic to be redirected over the VPN. This is a client-side option.
+  
+  **Option flags:**
+  
+  - `local` - Add if both OpenVPN peers are directly connected via a common subnet
+  - `autolocal` - Try to automatically determine whether to enable `local` flag
+  - `def1` - Override the default gateway by using 0.0.0.0/1 and 128.0.0.0/1 rather than 0.0.0.0/0
+  - `bypass-dhcp` - Add a direct route to the DHCP server which bypasses the tunnel
+  - `bypass-dns` - Add a direct route to the DNS server(s) which bypasses the tunnel
+  - `block-local` - Block access to local LAN when the tunnel is active
+  - `ipv6` - Redirect IPv6 routing into the tunnel
+  - `!ipv4` - Do not redirect IPv4 traffic
+  
+  **Example:**
+  ```
+  redirect-gateway def1
+  redirect-gateway ipv6 !ipv4
+  ```
+</ParamField>
+
+<ParamField path="--route-nopull" type="boolean">
+  When used with `--client` or `--pull`, accept options pushed by server EXCEPT for routes, block-outside-dns and dhcp options like DNS servers.
+  
+  <Note>
+  This option effectively bars the server from adding routes to the client's routing table, however note that this option still allows the server to set the TCP/IP properties of the client's TUN/TAP interface.
+  </Note>
+</ParamField>
+
+<ParamField path="--tun-mtu" type="number">
+  Take the TUN device MTU to be tun-mtu and derive the link MTU from it.
+  
+  **Syntax:**
+  ```
+  tun-mtu tun-mtu
+  tun-mtu tun-mtu occ-mtu
+  ```
+  
+  The default for tun-mtu is 1500.
+  
+  <Note>
+  In most cases, you will probably want to leave this parameter set to its default value. It's best to use the `--fragment` and/or `--mssfix` options to deal with MTU sizing issues.
+  </Note>
+</ParamField>
+
+<ParamField path="--tun-mtu-max" type="number">
+  This configures the maximum MTU size that a server can push to maxmtu, by configuring the internal buffers to allow at least this packet size.
+  
+  The default for `maxmtu` is 1600. Currently, only increasing beyond 1600 is possible.
+</ParamField>
+
+<ParamField path="--persist-tun" type="boolean">
+  Don't close and reopen TUN/TAP device or run up/down scripts across SIGUSR1 or `--ping-restart` restarts.
+  
+  <Note>
+  On Linux, this option can be useful when OpenVPN is not executed as root and the CAP_NET_ADMIN has not been granted, because the process would otherwise not be allowed to bring the interface down and back up.
+  </Note>
+</ParamField>
+
+<ParamField path="--block-ipv6" type="boolean">
+  On the client, instead of sending IPv6 packets over the VPN tunnel, all IPv6 packets are answered with an ICMPv6 no route host message.
+  
+  On the server, all IPv6 packets from clients are answered with an ICMPv6 no route to host message.
+  
+  <Note>
+  This option is intended for cases when IPv6 should be blocked and other options are not available.
+  </Note>
+</ParamField>
+
+<ParamField path="--dhcp-option" type="string">
+  Set additional network parameters on supported platforms. May be specified on the client or pushed from the server.
+  
+  **Syntax:**
+  ```
+  dhcp-option type [parm]
+  ```
+  
+  **Valid types:**
+  
+  - `DOMAIN name` - Set Connection-specific DNS Suffix
+  - `DOMAIN-SEARCH name` - Add name to the domain search list
+  - `DNS address` - Set primary domain name server IPv4 or IPv6 address
+  - `WINS address` - Set primary WINS server address
+  - `NTP address` - Set primary NTP server address
+  - `NBDD address` - Set primary NBDD server address
+  - `NBT type` - Set NetBIOS over TCP/IP Node type (1=b-node, 2=p-node, 4=m-node, 8=h-node)
+  - `DISABLE-NBT` - Disable Netbios-over-TCP/IP
+  
+  **Examples:**
+  ```
+  dhcp-option DNS 8.8.8.8
+  dhcp-option DOMAIN example.com
+  ```
+</ParamField>
+
+## Standalone TUN/TAP operations
+
+<ParamField path="--mktun" type="standalone">
+  Create a persistent tunnel on platforms which support them such as Linux.
+  
+  Normally TUN/TAP tunnels exist only for the period of time that an application has them open. This option takes advantage of the TUN/TAP driver's ability to build persistent tunnels that live through multiple instantiations of OpenVPN and die only when they are deleted or the machine is rebooted.
+  
+  <Note>
+  One of the advantages of persistent tunnels is that they eliminate the need for separate `--up` and `--down` scripts to run the appropriate `ifconfig` and `route` commands.
+  </Note>
+</ParamField>
+
+<ParamField path="--rmtun" type="standalone">
+  Remove a persistent tunnel.
+</ParamField>

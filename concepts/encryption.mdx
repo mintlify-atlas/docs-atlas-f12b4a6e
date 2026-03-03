@@ -1,0 +1,680 @@
+---
+title: Encryption and ciphers
+description: Comprehensive guide to OpenVPN's encryption mechanisms, supported ciphers, and cryptographic implementation details
+---
+
+OpenVPN provides robust encryption for securing VPN tunnels through multiple cryptographic layers. Understanding the encryption architecture is essential for configuring secure and performant VPN connections.
+
+## Encryption architecture
+
+OpenVPN's encryption system consists of two separate channels, each with distinct security requirements:
+
+<Tabs>
+  <Tab title="Control channel">
+    **TLS/SSL control channel**
+    
+    Protected by TLS 1.2+ with:
+    - TLS cipher suites (e.g., TLS-ECDHE-RSA-AES256-GCM-SHA384)
+    - Perfect forward secrecy via ECDHE/DHE
+    - Certificate-based authentication
+    - Optional tls-crypt/tls-auth protection
+    
+    The control channel handles:
+    - Authentication
+    - Key exchange
+    - Configuration push/pull
+    - Connection control messages
+  </Tab>
+  
+  <Tab title="Data channel">
+    **Encrypted data channel**
+    
+    Protected by symmetric encryption with:
+    - AEAD ciphers (recommended: AES-GCM, ChaCha20-Poly1305)
+    - Legacy ciphers with separate HMAC
+    - Packet ID for replay protection
+    - Regular key rotation
+    
+    The data channel handles:
+    - User traffic encryption/decryption
+    - Packet authentication
+    - Compression (optional)
+  </Tab>
+</Tabs>
+
+<Info>
+OpenVPN is tightly bound to the OpenSSL library and derives much of its crypto capabilities from it. It also supports mbedTLS as an alternative crypto backend.
+</Info>
+
+## Data channel crypto formats
+
+OpenVPN supports multiple data channel packet formats depending on the cipher mode. The implementation is documented in `src/openvpn/crypto.h:30`.
+
+### AEAD cipher format (GCM/CCM)
+
+From `src/openvpn/crypto.h:87`:
+
+```
+GCM modes are only supported in TLS mode. In these modes, the IV consists of
+the 32-bit packet counter followed by data from the HMAC key. The HMAC key
+can be used as IV, since in GCM and CCM modes the HMAC key is not used for
+the HMAC. The packet counter may not roll over within a single TLS sessions.
+This results in a unique IV for each packet, as required by GCM.
+
+The HMAC key data is pre-shared during the connection setup, and thus can be
+omitted in on-the-wire packets, saving 8 bytes per packet (for GCM and CCM).
+
+In GCM mode, P_DATA_V2 headers (the opcode and peer-id) are also
+authenticated as Additional Data.
+```
+
+**P_DATA_V2 GCM format:**
+```
+[ - opcode/peer-id - ] [ - packet ID - ] [ TAG ] [ * payload * ]
+```
+
+<Note>
+AEAD ciphers provide both encryption and authentication in a single operation, eliminating the need for a separate HMAC and improving performance.
+</Note>
+
+### CBC cipher format
+
+From `src/openvpn/crypto.h:61`:
+
+```
+CBC mode, both TLS-mode and static key mode are supported. The IV
+consists of random bits to provide unpredictable IVs.
+```
+
+**CBC format in TLS mode:**
+```
+[ HMAC ] [ - IV - ] [ * packet ID * ] [ * payload * ]
+```
+
+**CBC format in static key mode:**
+```
+[ HMAC ] [ - IV - ] [ * packet ID * ] [ * timestamp * ] [ * payload * ]
+```
+
+<Warning>
+CBC mode ciphers are considered legacy. Use AEAD ciphers (AES-GCM or ChaCha20-Poly1305) for new deployments. CBC mode will be deprecated in future OpenVPN versions.
+</Warning>
+
+## Supported ciphers
+
+OpenVPN supports a wide range of ciphers through the underlying crypto library.
+
+### Recommended AEAD ciphers
+
+Modern AEAD ciphers are strongly recommended:
+
+<Tabs>
+  <Tab title="AES-GCM">
+    **AES-GCM (Galois/Counter Mode)**
+    
+    Available variants:
+    - `AES-128-GCM` - 128-bit key
+    - `AES-192-GCM` - 192-bit key
+    - `AES-256-GCM` - 256-bit key (recommended)
+    
+    Characteristics:
+    - Hardware acceleration on modern CPUs (AES-NI)
+    - Excellent performance
+    - Strong security
+    - Required for DCO support
+    
+    ```bash
+    cipher AES-256-GCM
+    ```
+    
+    <Info>
+    AES-256-GCM is the recommended cipher for most deployments, offering excellent security and performance on hardware with AES-NI support.
+    </Info>
+  </Tab>
+  
+  <Tab title="ChaCha20-Poly1305">
+    **ChaCha20-Poly1305**
+    
+    Configuration:
+    ```bash
+    cipher CHACHA20-POLY1305
+    ```
+    
+    Characteristics:
+    - Software-based cipher
+    - Excellent performance on devices without AES-NI
+    - Strong security
+    - Required for DCO support
+    - Good for mobile devices
+    
+    <Tip>
+    ChaCha20-Poly1305 is ideal for mobile devices and embedded systems that lack hardware AES acceleration, providing better performance than AES-GCM in software.
+    </Tip>
+    
+    <Note>
+    On Windows, ChaCha20-Poly1305 support is available starting with Windows 11.
+    </Note>
+  </Tab>
+</Tabs>
+
+### Legacy ciphers
+
+Older cipher modes are still supported for backward compatibility:
+
+<Accordion title="AES-CBC variants">
+**AES in CBC mode**
+
+- `AES-128-CBC`
+- `AES-192-CBC`
+- `AES-256-CBC`
+
+These require a separate HMAC for authentication and use more bandwidth than AEAD ciphers.
+
+<Warning>
+AES-CBC should only be used when connecting to legacy OpenVPN servers. Always prefer AES-GCM for new deployments.
+</Warning>
+</Accordion>
+
+<Accordion title="Blowfish (deprecated)">
+**Blowfish-CBC**
+
+Configuration:
+```bash
+cipher BF-CBC
+```
+
+<Warning>
+Blowfish was the default cipher in OpenVPN 2.3 and earlier but is now considered weak due to its 64-bit block size. Do not use for new deployments.
+</Warning>
+</Accordion>
+
+<Accordion title="Other legacy ciphers">
+**Additional legacy options:**
+
+- `DES-EDE3-CBC` (3DES) - Weak, avoid use
+- `CAST5-CBC` - Rarely used
+- Various other CBC mode ciphers
+
+These exist primarily for backward compatibility with very old installations.
+</Accordion>
+
+### Viewing available ciphers
+
+To see all ciphers supported by your OpenVPN installation:
+
+```bash
+openvpn --show-ciphers
+```
+
+From `doc/man-sections/encryption-options.rst:7`:
+
+```
+--show-ciphers
+  (Standalone) Show all cipher algorithms to use with the --cipher option.
+```
+
+## HMAC authentication
+
+For non-AEAD ciphers, OpenVPN uses HMAC for packet authentication.
+
+### HMAC configuration
+
+From `src/openvpn/crypto.h:143`:
+
+```c
+struct key_type
+{
+    const char *cipher; /**< const name of the cipher */
+    const char *digest; /**< Message digest static parameters */
+};
+```
+
+Configure HMAC digest:
+
+```bash
+auth SHA256  # Recommended
+auth SHA512  # Maximum security
+auth SHA1    # Legacy, avoid
+```
+
+### Supported digests
+
+View available message digest algorithms:
+
+```bash
+openvpn --show-digests
+```
+
+From `doc/man-sections/encryption-options.rst:11`:
+
+```
+--show-digests
+  (Standalone) Show all message digest algorithms to use with the
+  --auth option.
+```
+
+Recommended digests:
+- `SHA256` - Good balance of security and performance
+- `SHA384` - Enhanced security
+- `SHA512` - Maximum security
+
+<Warning>
+SHA1 is cryptographically weak and should be avoided. Use SHA256 or better for all new deployments.
+</Warning>
+
+## Key structures and management
+
+OpenVPN implements sophisticated key management structures.
+
+### Key material structure
+
+From `src/openvpn/crypto.h:151`:
+
+```c
+/**
+ * Container for unidirectional cipher and HMAC key material.
+ * @ingroup control_processor. This is used as a wire format/file format
+ * key, so it cannot be changed to add fields or change the length of fields
+ */
+struct key
+{
+    uint8_t cipher[MAX_CIPHER_KEY_LENGTH];
+    /**< Key material for cipher operations. */
+    uint8_t hmac[MAX_HMAC_KEY_LENGTH];
+    /**< Key material for HMAC operations. */
+};
+```
+
+### Key context
+
+From `src/openvpn/crypto.h:201`:
+
+```c
+/**
+ * Container for one set of cipher and/or HMAC contexts.
+ * @ingroup control_processor
+ */
+struct key_ctx
+{
+    cipher_ctx_t *cipher; /**< Generic cipher context. */
+    hmac_ctx_t *hmac;     /**< Generic HMAC context. */
+    /**
+     * This implicit IV will be always XORed with the packet id that is 
+     * sent on the wire to get the IV. For the common AEAD ciphers of 
+     * AES-GCM and Chacha20-Poly1305, the length of the IV is 12 bytes 
+     * (96 bits).
+     */
+    uint8_t implicit_iv[OPENVPN_MAX_IV_LENGTH];
+    /**< The implicit part of the IV */
+    size_t implicit_iv_len; /**< The length of implicit_iv */
+};
+```
+
+### Bidirectional keys
+
+From `src/openvpn/crypto.h:279`:
+
+```c
+/**
+ * Container for two sets of OpenSSL cipher and/or HMAC contexts for both
+ * sending and receiving directions.
+ * @ingroup control_processor
+ */
+struct key_ctx_bi
+{
+    struct key_ctx encrypt; /**< Cipher and/or HMAC contexts for sending
+                             *   direction. */
+    struct key_ctx decrypt; /**< cipher and/or HMAC contexts for
+                             *   receiving direction. */
+    bool initialized;
+};
+```
+
+## Encryption and decryption operations
+
+OpenVPN provides core encryption/decryption functions for data channel packets.
+
+### Encryption function
+
+From `src/openvpn/crypto.h:483`:
+
+```c
+/**
+ * Encrypt and HMAC sign a packet so that it can be sent as a data channel
+ * VPN tunnel packet to a remote OpenVPN peer.
+ * @ingroup data_crypto
+ *
+ * This function handles encryption and HMAC signing of a data channel
+ * packet before it is sent to its remote OpenVPN peer. It receives the
+ * necessary security parameters in the \a opt argument, which should have
+ * been set to the correct values by the \c tls_pre_encrypt() function.
+ */
+void openvpn_encrypt(struct buffer *buf, struct buffer work, 
+                     struct crypto_options *opt);
+```
+
+### Decryption function
+
+From `src/openvpn/crypto.h:489`:
+
+```c
+/**
+ * HMAC verify and decrypt a data channel packet received from a remote
+ * OpenVPN peer.
+ * @ingroup data_crypto
+ *
+ * This function handles authenticating and decrypting a data channel
+ * packet received from a remote OpenVPN peer. It receives the necessary
+ * security parameters in the \a opt argument, which should have been set
+ * to the correct values by the \c tls_pre_decrypt() function.
+ */
+bool openvpn_decrypt(struct buffer *buf, struct buffer work, 
+                     struct crypto_options *opt,
+                     const struct frame *frame, 
+                     const uint8_t *ad_start);
+```
+
+<Note>
+If an error occurs during decryption or authentication, the buffer is set to empty and the packet is silently dropped to prevent information leakage.
+</Note>
+
+## Packet ID and replay protection
+
+OpenVPN uses packet IDs to prevent replay attacks.
+
+### Packet ID structure
+
+From `src/openvpn/crypto.h:333`:
+
+```c
+struct packet_id packet_id; /**< Current packet ID state for both
+                             *   sending and receiving directions.
+                             *
+                             *   This contains the packet id that is
+                             *   used for replay protection.
+                             *
+                             *   The packet id also used as the IV
+                             *   for AEAD/OFB/CFG ciphers.
+                             */
+```
+
+### Replay checking
+
+From `src/openvpn/crypto.h:535`:
+
+```c
+/**
+ * Check packet ID for replay, and perform replay administration.
+ *
+ * @param opt   Crypto options for this packet, contains replay state.
+ * @param pin   Packet ID read from packet.
+ * @param epoch Epoch read from packet or 0 when epoch is not used.
+ * @param error_prefix  Prefix to use when printing error messages.
+ * @param gc    Garbage collector to use.
+ *
+ * @return true if packet ID is validated to be not a replay, 
+ *         false otherwise.
+ */
+bool crypto_check_replay(struct crypto_options *opt, 
+                         const struct packet_id_net *pin,
+                         uint16_t epoch, const char *error_prefix, 
+                         struct gc_arena *gc);
+```
+
+<Warning>
+Packet ID replay protection is critical for security. Never disable replay warnings in production unless you fully understand the security implications.
+</Warning>
+
+## Epoch-based data keys
+
+Modern OpenVPN implements epoch-based key rotation for AEAD ciphers.
+
+### Epoch key structure
+
+From `src/openvpn/crypto.h:191`:
+
+```c
+struct epoch_key
+{
+    uint8_t epoch_key[SHA256_DIGEST_LENGTH];
+    uint16_t epoch;
+};
+```
+
+### AEAD usage limits
+
+From `src/openvpn/crypto.h:760`:
+
+```c
+/**
+ * Checks if the usage limit for an AEAD cipher is reached
+ *
+ * This method abstracts the calculation to make the calling function 
+ * easier to read.
+ */
+static inline bool
+aead_usage_limit_reached(const uint64_t limit, 
+                        const struct key_ctx *key_ctx, 
+                        int64_t higest_pid)
+{
+    /* This is the q + s <= p^(1/2) * 2^(129/2) - 1 calculation where
+     * q is the number of protected messages (highest_pid)
+     * s Total plaintext length in all messages (in blocks) */
+    return (limit > 0 && key_ctx->plaintext_blocks + 
+            (uint64_t)higest_pid > limit);
+}
+```
+
+<Info>
+AEAD ciphers have cryptographic limits on how much data can be safely encrypted with a single key. OpenVPN automatically manages key rotation to stay within these limits.
+</Info>
+
+### Cipher-specific limits
+
+From `src/openvpn/crypto.h:710`:
+
+```c
+/**
+ * Check if the cipher is an AEAD cipher and needs to be limited to a 
+ * certain number of number of blocks + packets. Return 0 if ciphername 
+ * is not an AEAD cipher or no limit (e.g. Chacha20-Poly1305) is needed.
+ *
+ * For reference see the OpenVPN RFC draft and
+ * https://www.ietf.org/archive/id/draft-irtf-cfrg-aead-limits-08.html
+ */
+uint64_t cipher_get_aead_limits(const char *ciphername);
+```
+
+## Crypto overhead calculation
+
+From `src/openvpn/crypto.h:552`:
+
+```c
+/** 
+ * Calculate the maximum overhead that our encryption has on a packet. 
+ * This does not include needed additional buffer size
+ *
+ * This does NOT include the padding and rounding of CBC size as the 
+ * users (mssfix/fragment) of this function need to adjust for this and 
+ * add it themselves.
+ *
+ * @param kt            Struct with the crypto algorithm to use
+ * @param pkt_id_size   Size of the packet id
+ * @param occ           if true calculates the overhead for crypto in 
+ *                      the same incorrect way as all previous OpenVPN 
+ *                      versions did, to end up with identical numbers 
+ *                      for OCC compatibility
+ */
+unsigned int calculate_crypto_overhead(const struct key_type *kt, 
+                                       unsigned int pkt_id_size,
+                                       bool occ);
+```
+
+Typical overhead:
+- **AES-256-GCM**: ~28 bytes (opcode + packet ID + tag)
+- **AES-256-CBC + SHA256**: ~60 bytes (opcode + HMAC + IV + packet ID)
+- **ChaCha20-Poly1305**: ~28 bytes (similar to GCM)
+
+## TLS control channel ciphers
+
+The control channel uses standard TLS cipher suites.
+
+### Viewing TLS ciphers
+
+From `doc/man-sections/encryption-options.rst:15`:
+
+```
+--show-tls
+  (Standalone) Show all TLS ciphers supported by the crypto library.
+  OpenVPN uses TLS to secure the control channel, over which the keys 
+  that are used to protect the actual VPN traffic are exchanged. The 
+  TLS ciphers will be sorted from highest preference (most secure) to 
+  lowest.
+```
+
+Command:
+```bash
+openvpn --show-tls
+```
+
+### TLS cipher configuration
+
+From `src/openvpn/ssl.h:554`:
+
+```c
+/*
+ * Show the TLS ciphers that are available for us to use in the SSL
+ * library with headers hinting their usage and warnings about usage.
+ *
+ * @param cipher_list       list of allowed TLS cipher, or NULL.
+ * @param cipher_list_tls13 list of allowed TLS 1.3+ cipher, or NULL
+ * @param tls_cert_profile  TLS certificate crypto profile name.
+ */
+void show_available_tls_ciphers(const char *cipher_list, 
+                                const char *cipher_list_tls13,
+                                const char *tls_cert_profile);
+```
+
+Configuration:
+```bash
+# TLS 1.2 ciphers
+tls-cipher TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384:TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384
+
+# TLS 1.3 ciphersuites
+tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+```
+
+<Tip>
+Always prefer cipher suites with forward secrecy (ECDHE/DHE) and AEAD modes (GCM/CCM/Poly1305).
+</Tip>
+
+## DCO cipher requirements
+
+Data Channel Offload has specific cipher requirements.
+
+From `README.dco.md:108`:
+
+```
+Limitations by design
+- only the following AEAD ciphers are currently supported: 
+  Chacha20-Poly1305 and AES-GCM-128/192/256;
+```
+
+Supported with DCO:
+- `AES-128-GCM`
+- `AES-192-GCM`
+- `AES-256-GCM`
+- `CHACHA20-POLY1305` (Windows 11+)
+
+Not supported with DCO:
+- Any CBC mode ciphers
+- Non-AEAD ciphers
+- Legacy ciphers
+
+<Warning>
+If you configure an unsupported cipher, OpenVPN will automatically fall back to userspace processing and disable DCO.
+</Warning>
+
+## Cipher negotiation
+
+OpenVPN implements Negotiable Cipher Parameters (NCP) to automatically negotiate the best cipher.
+
+### Default cipher negotiation
+
+Modern OpenVPN versions automatically negotiate:
+1. Server advertises supported ciphers
+2. Client selects best mutually supported cipher
+3. Both peers switch to negotiated cipher
+
+Configuration:
+```bash
+# Server offers multiple ciphers
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+# Client will negotiate from this list
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+<Info>
+Cipher negotiation happens during the TLS handshake, allowing peers to automatically select the best mutually supported cipher without manual configuration matching.
+</Info>
+
+## Security recommendations
+
+<Tabs>
+  <Tab title="Cipher selection">
+    **Recommended cipher configuration:**
+    
+    ```bash
+    # Modern secure configuration
+    data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+    
+    # Fallback for legacy clients (if needed)
+    data-ciphers-fallback AES-256-CBC
+    auth SHA256
+    ```
+    
+    Priorities:
+    1. Use AEAD ciphers (GCM/Poly1305)
+    2. Prefer AES-256-GCM for maximum security
+    3. Include ChaCha20-Poly1305 for mobile devices
+    4. Avoid CBC mode ciphers when possible
+  </Tab>
+  
+  <Tab title="Key management">
+    **Key rotation and management:**
+    
+    - Enable automatic TLS renegotiation
+    - Set reasonable `reneg-sec` values (default: 3600)
+    - Monitor key usage limits
+    - Use `tls-crypt` for control channel protection
+    
+    ```bash
+    # Renegotiate after 1 hour
+    reneg-sec 3600
+    
+    # Control channel encryption
+    tls-crypt ta.key
+    ```
+  </Tab>
+  
+  <Tab title="Performance">
+    **Performance optimization:**
+    
+    - Use hardware-accelerated ciphers (AES-GCM with AES-NI)
+    - Enable DCO for kernel-space processing
+    - Consider ChaCha20-Poly1305 for ARM devices
+    - Monitor CPU usage and adjust accordingly
+    
+    Check for hardware acceleration:
+    ```bash
+    openvpn --show-engines
+    ```
+  </Tab>
+</Tabs>
+
+## Related documentation
+
+- [Architecture](/concepts/architecture) - OpenVPN architecture overview
+- [Tunneling modes](/concepts/tunneling-modes) - Point-to-point vs client-server modes
+- [Authentication](/concepts/authentication) - Authentication methods and mechanisms

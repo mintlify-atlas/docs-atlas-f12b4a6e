@@ -1,0 +1,296 @@
+---
+title: Site-to-site VPN configuration
+description: Configure OpenVPN to securely connect two private networks, allowing machines on each network to communicate through an encrypted tunnel.
+---
+
+Site-to-site VPNs allow you to connect two private networks securely over the internet, enabling machines on each network to communicate as if they were on the same local network.
+
+## Overview
+
+In a site-to-site configuration:
+
+- Each location has a VPN gateway running OpenVPN
+- The gateways establish a secure tunnel between them
+- IP routing forwards traffic between the private networks
+- Machines on each network can access resources on the other network
+
+## Network topology
+
+For this example:
+
+**Bob's network:**
+- Internet-facing interface: bob.example.com
+- Private network: 10.0.0.0/24
+- VPN tunnel endpoint: 10.4.0.1
+
+**Alice's network:**
+- Internet-facing interface: alice.example.com
+- Private network: 10.0.1.0/24
+- VPN tunnel endpoint: 10.4.0.2
+
+## Prerequisites
+
+<Steps>
+  <Step title="Establish basic VPN tunnel">
+    First, set up a basic point-to-point VPN connection between bob and alice using one of the methods from the [basic setup guide](/examples/basic-setup).
+    
+    Verify you can ping across the tunnel:
+    ```bash
+    # On bob
+    ping 10.4.0.2
+    
+    # On alice
+    ping 10.4.0.1
+    ```
+  </Step>
+
+  <Step title="Enable IP forwarding on both gateways">
+    On Linux:
+    ```bash
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    ```
+    
+    <Warning>
+    This setting is not persistent across reboots. Configure your operating system to enable IP forwarding permanently.
+    </Warning>
+    
+    For persistent configuration:
+    
+    <Tabs>
+      <Tab title="Debian/Ubuntu">
+        Edit `/etc/sysctl.conf` and uncomment:
+        ```bash
+        net.ipv4.ip_forward=1
+        ```
+        
+        Apply changes:
+        ```bash
+        sudo sysctl -p
+        ```
+      </Tab>
+      
+      <Tab title="RHEL/CentOS">
+        Edit `/etc/sysctl.conf` and add:
+        ```bash
+        net.ipv4.ip_forward = 1
+        ```
+        
+        Apply changes:
+        ```bash
+        sudo sysctl -p
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Configure firewall rules">
+    Allow traffic to/from the TUN/TAP adapter OpenVPN uses. The exact configuration depends on your firewall (iptables, firewalld, ufw, etc.).
+    
+    <Note>
+    Consult your operating system's firewall documentation for specific instructions.
+    </Note>
+  </Step>
+</Steps>
+
+## Routing configuration
+
+<Steps>
+  <Step title="Add route on bob">
+    Configure bob to route traffic destined for alice's network through the VPN tunnel:
+    
+    ```bash
+    route add -net 10.0.1.0 netmask 255.255.255.0 gw 10.4.0.2
+    ```
+    
+    This tells bob that to reach the 10.0.1.0/24 network, packets should be sent to alice's tunnel endpoint (10.4.0.2).
+  </Step>
+
+  <Step title="Add route on alice">
+    Configure alice to route traffic destined for bob's network through the VPN tunnel:
+    
+    ```bash
+    route add -net 10.0.0.0 netmask 255.255.255.0 gw 10.4.0.1
+    ```
+    
+    This tells alice that to reach the 10.0.0.0/24 network, packets should be sent to bob's tunnel endpoint (10.4.0.1).
+  </Step>
+
+  <Step title="Test connectivity">
+    From any machine on bob's network (10.0.0.0/24), try to ping a machine on alice's network:
+    
+    ```bash
+    ping 10.0.1.50
+    ```
+    
+    From any machine on alice's network (10.0.1.0/24), try to ping a machine on bob's network:
+    
+    ```bash
+    ping 10.0.0.50
+    ```
+  </Step>
+</Steps>
+
+## Making routes persistent
+
+For production environments, automate route configuration using OpenVPN's `--up` script option.
+
+<Steps>
+  <Step title="Create route script on bob">
+    Create `/etc/openvpn/add-routes.sh`:
+    
+    ```bash
+    #!/bin/bash
+    # Add route to alice's network
+    route add -net 10.0.1.0 netmask 255.255.255.0 gw 10.4.0.2
+    ```
+    
+    Make it executable:
+    ```bash
+    chmod +x /etc/openvpn/add-routes.sh
+    ```
+  </Step>
+
+  <Step title="Create route script on alice">
+    Create `/etc/openvpn/add-routes.sh`:
+    
+    ```bash
+    #!/bin/bash
+    # Add route to bob's network
+    route add -net 10.0.0.0 netmask 255.255.255.0 gw 10.4.0.1
+    ```
+    
+    Make it executable:
+    ```bash
+    chmod +x /etc/openvpn/add-routes.sh
+    ```
+  </Step>
+
+  <Step title="Update OpenVPN configuration">
+    Add to both bob's and alice's OpenVPN configuration:
+    
+    ```bash
+    --up /etc/openvpn/add-routes.sh
+    ```
+    
+    Or in a configuration file:
+    ```
+    up /etc/openvpn/add-routes.sh
+    ```
+  </Step>
+</Steps>
+
+## Complete configuration example
+
+Here's a complete configuration file for a site-to-site setup:
+
+<CodeGroup>
+```bash bob.conf
+# Bob's site-to-site VPN configuration
+remote alice.example.com
+dev tun1
+ifconfig 10.4.0.1 10.4.0.2
+
+# TLS configuration
+tls-client
+ca ca.crt
+cert client.crt
+key client.key
+
+# Security settings
+cipher AES-256-GCM
+auth SHA256
+
+# Connection settings
+proto udp
+port 1194
+keepalive 10 120
+persist-tun
+persist-key
+
+# Routing
+up /etc/openvpn/add-routes.sh
+
+# Logging
+verb 3
+log-append /var/log/openvpn.log
+```
+
+```bash alice.conf
+# Alice's site-to-site VPN configuration
+remote bob.example.com
+dev tun1
+ifconfig 10.4.0.2 10.4.0.1
+
+# TLS configuration
+tls-server
+dh dh2048.pem
+ca ca.crt
+cert server.crt
+key server.key
+
+# Security settings
+cipher AES-256-GCM
+auth SHA256
+
+# Connection settings
+proto udp
+port 1194
+keepalive 10 120
+persist-tun
+persist-key
+
+# Routing
+up /etc/openvpn/add-routes.sh
+
+# Logging
+verb 3
+log-append /var/log/openvpn.log
+```
+</CodeGroup>
+
+## Advanced routing scenarios
+
+### Multiple subnets
+
+If bob has multiple subnets (e.g., 10.0.0.0/24 and 10.0.2.0/24), add multiple routes on alice:
+
+```bash
+route add -net 10.0.0.0 netmask 255.255.255.0 gw 10.4.0.1
+route add -net 10.0.2.0 netmask 255.255.255.0 gw 10.4.0.1
+```
+
+### Using push routes in server mode
+
+While site-to-site VPNs typically use peer-to-peer mode, you can also use server mode with route pushing:
+
+```bash
+# On the server side
+server 10.8.0.0 255.255.255.0
+push "route 192.168.10.0 255.255.255.0"
+push "route 192.168.20.0 255.255.255.0"
+```
+
+## Troubleshooting
+
+### Ping works but other traffic doesn't
+
+1. Verify IP forwarding is enabled on both gateways
+2. Check firewall rules on both gateways
+3. Ensure the TUN/TAP interface is not blocked
+
+### No connectivity between networks
+
+1. Verify the VPN tunnel is up: `ping 10.4.0.2` (from bob)
+2. Check routing tables: `route -n` or `ip route`
+3. Use `traceroute` to identify where packets are being dropped
+4. Check OpenVPN logs for errors
+
+### Asymmetric routing issues
+
+Ensure both sides have routes configured. Traffic must be able to flow in both directions.
+
+## Next steps
+
+- [Multi-client setup](/examples/multi-client) - Add multiple clients to your VPN
+- [Advanced configurations](/examples/advanced-configs) - Explore compression, QoS, and more
+- [Monitoring and logging](/operations/monitoring) - Track VPN health and performance

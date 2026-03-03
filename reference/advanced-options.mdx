@@ -1,0 +1,274 @@
+---
+title: Advanced configuration options
+description: Advanced and expert-level configuration options for OpenVPN tuning and optimization
+---
+
+## Standalone debug options
+
+<ParamField path="--show-gateway" type="standalone">
+  Show current IPv4 and IPv6 default gateway and interface towards the gateway (if the protocol in question is enabled).
+  
+  **Syntax:**
+  ```bash
+  openvpn --show-gateway
+  openvpn --show-gateway IPv4-target
+  openvpn --show-gateway IPv6-target
+  ```
+  
+  For IPv4 it looks for a 0.0.0.0/0 route, or the specified IPv4 address if the target can be parsed as an IPv4 address.
+  
+  For IPv6 this queries the route towards ::/128, or the specified IPv6 target address if the argument is an IPv6 address.
+  
+  <Note>
+  Adding a target is helpful for diagnostics to see if OpenVPN will do the right thing if there are more specific IPv4/IPv6 routes to a VPN server.
+  </Note>
+</ParamField>
+
+## Buffer and queue options
+
+These options are used for special tweaking, often when debugging or testing special usage scenarios.
+
+<ParamField path="--rcvbuf" type="number">
+  Set the TCP/UDP socket receive buffer size.
+  
+  Defaults to operating system default.
+  
+  <Note>
+  This option can be useful for improving throughput on high-latency or high-bandwidth connections.
+  </Note>
+</ParamField>
+
+<ParamField path="--sndbuf" type="number">
+  Set the TCP/UDP socket send buffer size.
+  
+  Defaults to operating system default.
+  
+  <Note>
+  This option can be useful for improving throughput on high-latency or high-bandwidth connections.
+  </Note>
+</ParamField>
+
+<ParamField path="--bcast-buffers" type="number" default="256">
+  Allocate n buffers for broadcast datagrams.
+  
+  **Default:** 256 buffers
+</ParamField>
+
+<ParamField path="--tcp-queue-limit" type="number" default="64">
+  Maximum number of output packets queued before TCP.
+  
+  When OpenVPN is tunneling data from a TUN/TAP device to a remote client over a TCP connection, it is possible that the TUN/TAP device might produce data at a faster rate than the TCP connection can support.
+  
+  When the number of output packets queued before sending to the TCP socket reaches this limit for a given client connection, OpenVPN will start to drop outgoing packets directed at this client.
+  
+  **Default:** 64 packets
+</ParamField>
+
+<ParamField path="--txqueuelen" type="number">
+  Set the TX queue length on the TUN/TAP interface. Linux only.
+  
+  Currently defaults to operating system default.
+  
+  <Note>
+  This option only works on Linux systems.
+  </Note>
+</ParamField>
+
+## Hash table sizing
+
+<ParamField path="--hash-size" type="string">
+  Set the size of the real address hash table to r and the virtual address table to v.
+  
+  **Syntax:**
+  ```
+  hash-size r v
+  ```
+  
+  By default, both tables are sized at 256 buckets.
+  
+  **Example:**
+  ```bash
+  hash-size 512 512
+  ```
+</ParamField>
+
+## Bandwidth and traffic shaping
+
+<ParamField path="--shaper" type="number">
+  Limit bandwidth of outgoing tunnel data to n bytes per second on the TCP/UDP port.
+  
+  <Warning>
+  This will only work if mode is set to `p2p`. If you want to limit the bandwidth in both directions, use this option on both peers.
+  </Warning>
+  
+  OpenVPN uses the following algorithm to implement traffic shaping: Given a shaper rate of n bytes per second, after a datagram write of b bytes is queued on the TCP/UDP port, wait a minimum of (b / n) seconds before queuing the next write.
+  
+  <Note>
+  OpenVPN supports multiple tunnels between the same two peers, allowing you to construct full-speed and reduced bandwidth tunnels at the same time, routing low-priority data such as off-site backups over the reduced bandwidth tunnel.
+  </Note>
+  
+  <Warning>
+  For low bandwidth tunnels (under 1000 bytes per second), you should probably use lower MTU values as well, otherwise the packet latency will grow so large as to trigger timeouts in the TLS layer and TCP connections running over the tunnel.
+  </Warning>
+  
+  OpenVPN allows n to be between 100 bytes/sec and 100 Mbytes/sec.
+</ParamField>
+
+## Persistence options
+
+<ParamField path="--persist-local-ip" type="boolean">
+  Preserve initially resolved local IP address and port number across `SIGUSR1` or `--ping-restart` restarts.
+  
+  <Note>
+  This option helps maintain connection stability when the local network configuration changes.
+  </Note>
+</ParamField>
+
+<ParamField path="--persist-remote-ip" type="boolean">
+  Preserve most recently authenticated remote IP address and port number across SIGUSR1 or `--ping-restart` restarts.
+  
+  <Note>
+  This option is useful when dealing with peers that may change their IP address due to DHCP or other dynamic addressing.
+  </Note>
+</ParamField>
+
+## Data channel offload
+
+<ParamField path="--disable-dco" type="boolean">
+  Disables the opportunistic use of data channel offloading if available.
+  
+  Without this option, OpenVPN will opportunistically use DCO mode if the config options and the running kernel supports using DCO.
+  
+  <Note>
+  Data channel offload currently requires data-ciphers to only contain AEAD ciphers (AES-GCM and Chacha20-Poly1305) and Linux with the ovpn-dco module.
+  </Note>
+  
+  <Warning>
+  Some options have no effect or cannot be used when DCO mode is enabled.
+  </Warning>
+  
+  On platforms that do not support DCO, `--disable-dco` has no effect.
+</ParamField>
+
+## Examples
+
+<Accordion title="High-performance configuration">
+  ```bash
+  # Optimize for high-bandwidth, low-latency connections
+  rcvbuf 524288
+  sndbuf 524288
+  tcp-queue-limit 128
+  disable-dco
+  ```
+  
+  This configuration:
+  - Increases socket buffers to 512 KB
+  - Doubles the TCP queue limit
+  - Disables DCO for maximum compatibility
+  - Suitable for high-speed connections
+</Accordion>
+
+<Accordion title="Bandwidth-limited connection">
+  ```bash
+  # Limit tunnel bandwidth to 1 Mbps
+  shaper 125000
+  tun-mtu 1200
+  mssfix 1150
+  ```
+  
+  This configuration:
+  - Limits bandwidth to 125,000 bytes/sec (1 Mbps)
+  - Reduces MTU to prevent latency issues
+  - Adjusts MSS fix accordingly
+  - Suitable for rate-limited connections
+</Accordion>
+
+<Accordion title="Large-scale server deployment">
+  ```bash
+  # Optimize for many concurrent connections
+  hash-size 1024 1024
+  bcast-buffers 512
+  tcp-queue-limit 256
+  max-clients 500
+  ```
+  
+  This configuration:
+  - Increases hash table sizes for better performance
+  - Allocates more broadcast buffers
+  - Increases TCP queue limit
+  - Suitable for high-capacity servers
+</Accordion>
+
+<Accordion title="Mobile client with unstable IP">
+  ```bash
+  # Maintain connection through IP changes
+  persist-local-ip
+  persist-remote-ip
+  float
+  ping-restart 60
+  ```
+  
+  This configuration:
+  - Preserves IP addresses across restarts
+  - Allows remote IP to change
+  - Restarts connection if ping fails
+  - Suitable for mobile clients
+</Accordion>
+
+<Accordion title="Diagnostic and troubleshooting">
+  ```bash
+  # Run diagnostics before connecting
+  openvpn --show-gateway
+  openvpn --show-gateway 8.8.8.8
+  openvpn --show-gateway 2001:4860:4860::8888
+  ```
+  
+  These commands:
+  - Show default gateways for IPv4 and IPv6
+  - Test routing to specific IPv4 target
+  - Test routing to specific IPv6 target
+  - Useful for diagnosing routing issues
+</Accordion>
+
+## Best practices
+
+<Warning>
+**Expert options warning:**
+
+These are advanced options that should only be used when special tweaking is needed. Incorrect configuration can degrade performance or cause connection issues.
+
+- Only modify buffer sizes if you have a specific performance issue
+- Test changes thoroughly before deploying to production
+- Document why each advanced option is needed
+- Monitor performance metrics after changes
+</Warning>
+
+<Note>
+**When to use these options:**
+
+- **Buffer options** (`--rcvbuf`, `--sndbuf`): High-bandwidth or high-latency connections
+- **Hash sizing** (`--hash-size`): Servers with many concurrent connections (100+)
+- **Traffic shaping** (`--shaper`): Bandwidth-constrained environments
+- **DCO disable** (`--disable-dco`): Compatibility issues or when using incompatible options
+- **Persistence options**: Mobile clients or dynamic IP environments
+</Note>
+
+<Note>
+**Platform-specific considerations:**
+
+- `--txqueuelen` is Linux-only
+- DCO (Data Channel Offload) requires Linux kernel support
+- Some options may have different effects on different operating systems
+- Always test on target platforms before deployment
+</Note>
+
+<Note>
+**Performance tuning process:**
+
+1. Establish baseline performance metrics
+2. Identify bottlenecks (bandwidth, latency, CPU)
+3. Apply one change at a time
+4. Measure impact of each change
+5. Document successful optimizations
+6. Monitor long-term stability
+</Note>

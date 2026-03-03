@@ -1,0 +1,185 @@
+---
+title: Linux
+description: Linux-specific installation and setup information for OpenVPN
+---
+
+OpenVPN has comprehensive support for Linux systems, with integrated kernel support for TUN/TAP devices and Data Channel Offload (DCO) capabilities.
+
+## Platform status
+
+Linux is a **Tier 1 platform** - actively tested for every source commit across multiple Linux distributions.
+
+## TUN/TAP driver setup
+
+Linux 2.6 and higher include an integrated TUN/TAP driver.
+
+<Steps>
+  <Step title="Load the TUN driver">
+    Load the TUN kernel module (required once per reboot):
+    ```bash
+    modprobe tun
+    ```
+  </Step>
+  
+  <Step title="Enable IP forwarding">
+    For routing VPN traffic, enable IPv4 forwarding:
+    ```bash
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    ```
+  </Step>
+</Steps>
+
+<Note>
+If you install OpenVPN from RPM packages and use the `openvpn.init` script, these steps are automatically handled for you.
+</Note>
+
+## Installation
+
+<Tabs>
+  <Tab title="From packages">
+    OpenVPN is available as Debian/RPM packages for most Linux distributions:
+
+    **Debian/Ubuntu:**
+    ```bash
+    apt-get install openvpn
+    ```
+
+    **Fedora/RHEL/CentOS:**
+    ```bash
+    dnf install openvpn
+    ```
+
+    **Arch Linux:**
+    ```bash
+    pacman -S openvpn
+    ```
+
+    <Info>
+    The OpenVPN community provides best-effort package repositories:
+    https://community.openvpn.net/openvpn/wiki/OpenvpnSoftwareRepos
+    </Info>
+  </Tab>
+  
+  <Tab title="From source">
+    Build OpenVPN from source:
+
+    ```bash
+    ./configure && make && sudo make install
+    ```
+
+    For builds from the git repository:
+    ```bash
+    autoreconf -i -v -f
+    ./configure
+    make
+    sudo make install
+    ```
+  </Tab>
+</Tabs>
+
+## System requirements
+
+- **libnl-gen**: Required for kernel netlink support
+- **libcap-ng**: Required for Linux capability handling
+- **OpenSSL 1.1.0+** or **mbed TLS 3.2.1+**: For encryption
+
+### Optional dependencies
+
+- **LZO**: For compression support
+- **LZ4**: For LZ4 compression
+
+## Data Channel Offload (DCO)
+
+Linux supports kernel-level data channel offloading via the `ovpn-dco` kernel module for improved performance.
+
+### DCO requirements
+
+- Linux kernel 6.16+ (includes DCO module upstream)
+- OpenVPN 2.7+ (for the new `ovpn` kernel module)
+- For older kernels: use the ovpn-backports project
+
+<Note>
+The new `ovpn` Linux kernel module is compatible only with OpenVPN 2.7 and greater.
+</Note>
+
+### Building with DCO support
+
+```bash
+git clone https://github.com/openvpn/openvpn.git
+cd openvpn
+autoreconf -vi
+./configure --enable-dco
+make
+sudo make install
+```
+
+### Using DCO
+
+OpenVPN automatically detects and enables DCO support if available. To disable:
+
+```bash
+openvpn --config myconfig.ovpn --disable-dco
+```
+
+If DCO is not available, you'll see:
+```
+Note: Kernel support for ovpn-dco missing, disabling data channel offload.
+```
+
+## Linux-specific features
+
+### Netlink support
+
+OpenVPN uses the netlink(3) kernel interface for IP address configuration and routing (unless built with `--enable-iproute2`). This is much faster than calling `ifconfig` or `route` and allows OpenVPN to run with fewer privileges.
+
+### Virtual Routing and Forwarding (VRF)
+
+OpenVPN supports Linux VRF using the `--bind-dev` option to place the outside socket into a specific VRF.
+
+### User-defined routing tables
+
+Use the `--route-table` option to specify custom routing tables:
+
+```bash
+openvpn --config myconfig.ovpn --route-table 100
+```
+
+### DNS configuration
+
+OpenVPN 2.7+ includes a default `--dns-updown` script that handles DNS configuration on systems using:
+- systemd-resolved
+- resolvconf
+- Raw `/etc/resolv.conf` files
+
+Split-DNS configurations are supported out-of-the-box on most modern Linux distributions.
+
+## DCO routing behavior
+
+The ovpn-dco kernel module uses a transparent routing approach:
+
+- Each client receives a VPN IPv4 and/or IPv6 address
+- Additional IP ranges can be routed to clients by adding routes with the client VPN IP as gateway:
+  ```bash
+  ip route add 10.8.1.0/24 via $CLIENT_VPN_IP
+  ```
+- No internal routing is available - use iptables or ip rule for filtering
+- Client-to-client traffic reaches the tunnel interface and is re-routed based on system routing tables
+
+## DCO limitations
+
+<Warning>
+Linux DCO has the following limitations:
+</Warning>
+
+- **Layer 3 only** (dev tun) - no TAP support
+- **AEAD ciphers only**: ChaCha20-Poly1305, AES-GCM-128/192/256
+- **No compression support**
+- **Topology subnet only** for servers
+- **OpenVPN 2.4.0+ peers required** (for AEAD cipher support)
+- IPv6 mapped IPv4 addresses require Linux 5.4.189+/5.10.110+/5.12+
+
+## Performance considerations
+
+- DCO provides significant performance improvements for high-throughput connections
+- Netlink interface is faster than traditional ifconfig/route commands
+- Use `--txlen` carefully - OS defaults are often better than custom values

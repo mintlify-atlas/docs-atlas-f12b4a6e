@@ -1,0 +1,605 @@
+---
+title: Setting up OpenVPN clients
+description: Complete guide to configuring OpenVPN clients for secure VPN connections with real configuration examples
+---
+
+## Overview
+
+OpenVPN clients connect to OpenVPN servers to establish secure VPN tunnels. This guide covers client configuration from basic setups to advanced scenarios.
+
+<Note>
+The `--client` directive is a helper that automatically enables `--pull` and `--tls-client` for simplified client configuration.
+</Note>
+
+## Basic client configuration
+
+Here's a production-ready client configuration based on the OpenVPN 2.6 sample:
+
+```conf client.conf
+##############################################
+# Sample client-side OpenVPN 2.6 config file #
+# for connecting to multi-client server.     #
+##############################################
+
+# Specify that we are a client and that we
+# will be pulling certain config file directives
+# from the server.
+client
+
+# Use the same setting as you are using on
+# the server.
+dev tun
+
+# Are we connecting to a TCP or
+# UDP server?  Use the same setting as
+# on the server.
+proto udp
+
+# The hostname/IP and port of the server.
+# You can have multiple remote entries
+# to load balance between the servers.
+remote my-server-1 1194
+
+# Keep trying indefinitely to resolve the
+# host name of the OpenVPN server.  Very useful
+# on machines which are not permanently connected
+# to the internet such as laptops.
+resolv-retry infinite
+
+# Most clients don't need to bind to
+# a specific local port number.
+nobind
+
+# Try to preserve some state across restarts.
+persist-tun
+
+# SSL/TLS parms.
+ca ca.crt
+cert client.crt
+key client.key
+
+# Verify server certificate by checking that the
+# certificate has the correct key usage set.
+remote-cert-tls server
+
+# Set log file verbosity.
+verb 3
+```
+
+## Client setup process
+
+<Steps>
+  <Step title="Obtain required files">
+    Get the following files from your VPN administrator:
+    - `ca.crt` - Certificate Authority certificate
+    - `client.crt` - Client certificate
+    - `client.key` - Client private key
+    - `client.conf` - Client configuration file
+  </Step>
+  
+  <Step title="Place files in the correct location">
+    <Tabs>
+      <Tab title="Linux/macOS">
+        ```bash
+        sudo mkdir -p /etc/openvpn/client
+        sudo cp ca.crt client.crt client.key /etc/openvpn/client/
+        sudo cp client.conf /etc/openvpn/client/
+        sudo chmod 600 /etc/openvpn/client/client.key
+        ```
+      </Tab>
+      <Tab title="Windows">
+        Copy files to `C:\Program Files\OpenVPN\config\`
+        
+        Rename `client.conf` to `client.ovpn` for Windows integration.
+      </Tab>
+    </Tabs>
+  </Step>
+  
+  <Step title="Edit the configuration">
+    Update the `remote` directive with your server's address:
+    ```conf
+    remote vpn.example.com 1194
+    ```
+  </Step>
+  
+  <Step title="Test the connection">
+    <CodeGroup>
+    ```bash Linux
+    sudo openvpn --config /etc/openvpn/client/client.conf
+    ```
+    
+    ```bash macOS
+    sudo openvpn --config /etc/openvpn/client/client.conf
+    ```
+    
+    ```bash Windows (Command Prompt as Administrator)
+    "C:\Program Files\OpenVPN\bin\openvpn.exe" --config "C:\Program Files\OpenVPN\config\client.ovpn"
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+## Connection options
+
+### Server specification
+
+The `--remote` directive specifies the server to connect to:
+
+```conf
+# Basic format
+remote hostname port protocol
+
+# Examples
+remote vpn.example.com 1194 udp
+remote 192.168.1.100 1194 tcp
+remote vpn.example.com 443 tcp6  # IPv6 over TCP
+```
+
+### Multiple servers for redundancy
+
+Specify multiple servers for automatic failover:
+
+```conf
+# Try servers in order
+remote primary.example.com 1194
+remote backup.example.com 1194  
+remote failover.example.com 1194
+
+# Or randomize for load balancing
+remote server1.example.com 1194
+remote server2.example.com 1194
+remote-random
+```
+
+<Note>
+The client will move to the next server in the list if connection fails or times out.
+</Note>
+
+### Connection retry behavior
+
+```conf
+# Keep trying to resolve DNS indefinitely (good for laptops)
+resolv-retry infinite
+
+# Wait between connection attempts (seconds)
+connect-retry 5
+
+# Maximum number of connection attempts per server
+connect-retry-max 3
+
+# Server connection timeout (seconds)
+server-poll-timeout 120
+```
+
+## Network interface configuration
+
+### TUN vs TAP devices
+
+<Tabs>
+  <Tab title="TUN (routed)">
+    ```conf
+    # TUN device creates IP tunnel (most common)
+    dev tun
+    
+    # More efficient for most use cases
+    # Works at the IP layer (Layer 3)
+    # Cannot bridge networks
+    ```
+  </Tab>
+  <Tab title="TAP (bridged)">
+    ```conf
+    # TAP device creates Ethernet tunnel
+    dev tap
+    
+    # Required for bridging
+    # Works at Ethernet layer (Layer 2)
+    # Supports non-IP protocols
+    ```
+  </Tab>
+</Tabs>
+
+### Windows-specific interface options
+
+```conf
+# Windows TAP adapter name (if you have multiple)
+dev-node "Local Area Connection 2"
+
+# Or use TAP with specific adapter
+dev tap
+dev-node MyTap
+```
+
+## Authentication methods
+
+### Certificate-based authentication (recommended)
+
+```conf
+# Standard certificate authentication
+ca ca.crt
+cert client.crt
+key client.key
+
+# Verify server has the correct certificate type
+remote-cert-tls server
+```
+
+### Username/password authentication
+
+<CodeGroup>
+```conf Interactive prompt
+# Prompt for username/password at startup
+auth-user-pass
+```
+
+```conf Credentials file
+# Read credentials from file
+auth-user-pass credentials.txt
+```
+
+```txt credentials.txt
+username
+password
+```
+</CodeGroup>
+
+<Warning>
+If using a credentials file, ensure it has restrictive permissions:
+```bash
+chmod 600 credentials.txt
+```
+</Warning>
+
+### Inline credentials
+
+```conf
+<auth-user-pass>
+username
+password
+</auth-user-pass>
+```
+
+### Authentication retry behavior
+
+```conf
+# Control behavior on authentication failure
+auth-retry interact  # Prompt again on failure
+auth-retry nointeract  # Retry without prompting (for unattended clients)
+auth-retry none  # Exit on failure (default)
+```
+
+## Security configuration
+
+### Certificate verification
+
+```conf
+# Verify server certificate usage
+remote-cert-tls server
+
+# Additional HMAC authentication (if server uses it)
+tls-auth ta.key 1  # Key direction must be 1 for clients
+```
+
+### Cipher configuration
+
+```conf
+# Modern cipher configuration (OpenVPN 2.4+)
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+# Support legacy servers (OpenVPN 2.3.x)
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC
+```
+
+<Note>
+OpenVPN 2.4+ negotiates the cipher with the server automatically. The server's preference takes priority.
+</Note>
+
+## Client behavior options
+
+### Privilege dropping (Linux/Unix)
+
+Run with minimal privileges after initialization:
+
+```conf
+# Drop to unprivileged user after startup
+user openvpn
+group openvpn
+
+# Prevent re-reading files on restart
+persist-tun
+```
+
+<Warning>
+When dropping privileges, you must use `persist-tun` to prevent failures on connection restart.
+</Warning>
+
+### DNS configuration
+
+OpenVPN 2.6+ supports the `--dns` directive pushed from servers:
+
+```conf
+# Modern DNS configuration (pushed by server)
+# Client must support the 'dns' option
+
+# For older servers, use dhcp-option
+# dhcp-option DNS 8.8.8.8
+# dhcp-option DNS 8.8.4.4
+```
+
+### State persistence
+
+```conf
+# Preserve device state across restarts
+persist-tun
+
+# Don't re-read keys on restart
+persist-key
+```
+
+## Proxy configuration
+
+Connect through an HTTP proxy:
+
+```conf
+# Basic HTTP proxy
+http-proxy proxy.example.com 8080
+
+# Proxy with authentication
+http-proxy proxy.example.com 8080 credentials.txt
+
+# Retry proxy connection on failure
+http-proxy-retry
+
+# Proxy timeout (seconds)
+http-proxy-timeout 30
+```
+
+For SOCKS proxy:
+
+```conf
+socks-proxy proxy.example.com 1080
+```
+
+## Advanced client options
+
+### Routing configuration
+
+Clients typically accept routes pushed by the server, but can filter them:
+
+```conf
+# Accept all routes from server (default with --client)
+pull
+
+# Filter pushed routes
+pull-filter accept "route 192.168.1."
+pull-filter ignore "route "
+
+# Reject specific pushed options
+pull-filter reject "redirect-gateway"
+```
+
+<Warning>
+`pull-filter` should not be relied upon as a security measure. It can be defeated by creative formatting.
+</Warning>
+
+### Client NAT
+
+Handle IP address conflicts with client-side NAT:
+
+```conf
+# Source NAT for local resources
+client-nat snat 192.168.0.0/255.255.0.0
+
+# Destination NAT for remote resources  
+client-nat dnat 10.64.0.0/255.255.0.0
+```
+
+### Inactive timeout
+
+```conf
+# Disconnect after 300 seconds of inactivity
+inactive 300
+
+# Disconnect if less than 10000 bytes in 300 seconds
+inactive 300 10000
+```
+
+## Logging and monitoring
+
+### Log configuration
+
+```conf
+# Log verbosity (0=silent, 3=normal, 5-6=debug, 9=extremely verbose)
+verb 3
+
+# Suppress duplicate messages
+mute 20
+
+# Don't warn about replay packets
+mute-replay-warnings
+
+# Write log to file
+log /var/log/openvpn-client.log
+
+# Or append to existing log
+log-append /var/log/openvpn-client.log
+```
+
+### Status output
+
+```conf
+# Write status to file every 60 seconds
+status /var/run/openvpn-status.log 60
+```
+
+## Platform-specific configurations
+
+### Linux systemd service
+
+<Steps>
+  <Step title="Place configuration file">
+    ```bash
+    sudo cp client.conf /etc/openvpn/client/mycompany.conf
+    ```
+  </Step>
+  
+  <Step title="Enable and start service">
+    ```bash
+    sudo systemctl enable openvpn-client@mycompany
+    sudo systemctl start openvpn-client@mycompany
+    ```
+  </Step>
+  
+  <Step title="Check status">
+    ```bash
+    sudo systemctl status openvpn-client@mycompany
+    sudo journalctl -u openvpn-client@mycompany -f
+    ```
+  </Step>
+</Steps>
+
+### Windows service
+
+<Steps>
+  <Step title="Place .ovpn file">
+    Copy configuration to `C:\Program Files\OpenVPN\config\`
+  </Step>
+  
+  <Step title="Start OpenVPN GUI">
+    Right-click the OpenVPN GUI icon in the system tray and select your configuration.
+  </Step>
+  
+  <Step title="Or use the service">
+    ```bash
+    net start OpenVPNService
+    ```
+  </Step>
+</Steps>
+
+### macOS
+
+Use Tunnelblick or the command line:
+
+```bash
+sudo openvpn --config /etc/openvpn/client.conf --daemon
+```
+
+## Troubleshooting
+
+### Connection issues
+
+<CodeGroup>
+```conf Increase verbosity
+verb 6  # More detailed logging
+```
+
+```conf Test DNS resolution
+resolv-retry 10  # Limit retries for testing
+```
+
+```conf Disable features for testing
+# Comment out temporarily
+#comp-lzo
+#persist-tun
+```
+</CodeGroup>
+
+### Common error messages
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| "Connection refused" | Wrong port or firewall | Check port and firewall rules |
+| "TLS handshake failed" | Certificate mismatch | Verify CA, cert, and key files |
+| "AUTH_FAILED" | Wrong credentials | Check username/password |
+| "Inactivity timeout" | No traffic | Disable inactive timeout or check routing |
+
+### Testing connectivity
+
+```bash
+# Test basic connectivity
+ping -c 4 server.example.com
+
+# Test specific port (UDP)
+nc -u -v server.example.com 1194
+
+# Test specific port (TCP)
+nc -v server.example.com 443
+
+# Run OpenVPN in foreground for testing
+sudo openvpn --config client.conf
+```
+
+## Complete example configurations
+
+### Minimal mobile client
+
+```conf
+client
+remote vpn.company.com 1194
+proto udp
+dev tun
+nobind
+resolv-retry infinite
+persist-tun
+remote-cert-tls server
+verb 3
+
+<ca>
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+</ca>
+
+<cert>
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+</cert>
+
+<key>
+-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----
+</key>
+```
+
+### Enterprise client with authentication
+
+```conf
+client
+remote primary.company.com 1194 udp
+remote backup.company.com 1194 udp
+remote-random
+dev tun
+proto udp
+nobind
+
+# Authentication
+auth-user-pass
+ca ca.crt
+cert client.crt
+key client.key
+remote-cert-tls server
+tls-auth ta.key 1
+
+# Security
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+auth SHA512
+
+# Behavior
+resolv-retry infinite
+connect-retry 5
+connect-retry-max 3
+persist-tun
+
+# Logging
+verb 3
+mute 20
+status /var/log/openvpn-status.log 60
+log-append /var/log/openvpn.log
+```
+
+## Next steps
+
+- [Server setup guide](/configuration/server-setup) - Configure OpenVPN servers
+- [Options reference](/configuration/options-reference) - Complete configuration options
+- [Configuration overview](/configuration/overview) - File format and structure

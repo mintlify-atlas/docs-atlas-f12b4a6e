@@ -1,0 +1,567 @@
+---
+title: Cipher selection and configuration
+description: Configure data channel ciphers, negotiate encryption algorithms, and optimize cipher selection for security and performance
+---
+
+## Overview
+
+OpenVPN uses different ciphers for the control channel (TLS) and data channel (VPN traffic). This guide focuses on data channel cipher configuration and negotiation.
+
+## Cipher negotiation
+
+OpenVPN 2.4 and later support automatic cipher negotiation between client and server.
+
+### How negotiation works
+
+When both client and server are OpenVPN 2.5 or later:
+
+<Steps>
+  <Step title="Client announces supported ciphers">
+    The client sends its list of supported ciphers from `--data-ciphers` to the server.
+  </Step>
+  
+  <Step title="Server selects cipher">
+    The server picks the first cipher from its `--data-ciphers` list that is also supported by the client.
+  </Step>
+  
+  <Step title="Cipher confirmed">
+    The selected cipher is used for encrypting all data channel traffic.
+  </Step>
+  
+  <Step title="Connection rejected if no match">
+    If no common cipher is found, the client receives:
+    ```
+    AUTH_FAILED,Data channel cipher negotiation failed (no shared cipher)
+    ```
+  </Step>
+</Steps>
+
+## Data cipher configuration
+
+### Default ciphers
+
+**OpenVPN 2.5:**
+```bash
+# Default data-ciphers
+AES-256-GCM:AES-128-GCM
+```
+
+**OpenVPN 2.6 and later:**
+```bash
+# Default data-ciphers (when Chacha20-Poly1305 available)
+AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+### Setting data ciphers
+
+<CodeGroup>
+```bash Server
+# Server configuration
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+```bash Client
+# Client configuration
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+</CodeGroup>
+
+<Note>
+The server's cipher order takes precedence. The first cipher in the server's list that is also in the client's list will be selected.
+</Note>
+
+### Viewing available ciphers
+
+```bash
+# Show all data channel ciphers
+openvpn --show-ciphers
+
+# Example output:
+AES-256-GCM
+AES-128-GCM
+AES-256-CBC
+AES-128-CBC
+CHACHA20-POLY1305
+BF-CBC
+```
+
+## Recommended ciphers
+
+### Modern secure ciphers (AEAD)
+
+AEAD (Authenticated Encryption with Associated Data) ciphers provide both encryption and authentication:
+
+| Cipher | Key Size | Performance | Security | Recommendation |
+|--------|----------|-------------|----------|----------------|
+| AES-256-GCM | 256-bit | Excellent with AES-NI | Excellent | **Recommended** |
+| AES-128-GCM | 128-bit | Excellent with AES-NI | Excellent | **Recommended** |
+| CHACHA20-POLY1305 | 256-bit | Excellent on mobile | Excellent | **Recommended** |
+
+<Note>
+AEAD ciphers don't use the `--auth` option. Authentication is built into the cipher.
+</Note>
+
+### Legacy ciphers (CBC mode)
+
+<Warning>
+CBC mode ciphers are less secure than AEAD ciphers and should only be used for compatibility with older clients.
+</Warning>
+
+| Cipher | Key Size | Security | Status |
+|--------|----------|----------|--------|
+| AES-256-CBC | 256-bit | Good (with auth) | Legacy |
+| AES-128-CBC | 128-bit | Good (with auth) | Legacy |
+| BF-CBC (Blowfish) | 128-bit | Weak | **Deprecated** |
+| DES-CBC | 56-bit | Broken | **Insecure** |
+
+### Cipher recommendations by use case
+
+<CodeGroup>
+```bash Modern (Recommended)
+# Servers with hardware AES support
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+```bash Mobile-First
+# Prioritize CHACHA20 for mobile devices without AES-NI
+data-ciphers CHACHA20-POLY1305:AES-256-GCM:AES-128-GCM
+```
+
+```bash High Security
+# Only strongest ciphers
+data-ciphers AES-256-GCM:CHACHA20-POLY1305
+```
+
+```bash Compatibility
+# Support older clients (OpenVPN 2.4 and earlier)
+data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
+cipher AES-256-CBC
+auth SHA256
+```
+</CodeGroup>
+
+## Cipher configuration options
+
+### data-ciphers (preferred method)
+
+Specifies the list of allowed data channel ciphers for negotiation:
+
+```bash
+# Set allowed ciphers
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+### cipher (fallback method)
+
+Specifies a single cipher for non-negotiating clients:
+
+```bash
+# Fallback cipher for old clients
+cipher AES-256-CBC
+```
+
+<Note>
+In OpenVPN 2.5+ with `--compat-mode 2.4.x` or lower, the `--cipher` value is automatically added to `--data-ciphers` for backwards compatibility.
+</Note>
+
+### data-ciphers-fallback
+
+Specifies the cipher to use when negotiation fails:
+
+```bash
+# Fallback for clients configured with --enable-small
+data-ciphers-fallback AES-256-CBC
+```
+
+<Warning>
+Only use `--data-ciphers-fallback` when supporting very old clients (OpenVPN 2.3 or earlier) compiled with `--enable-small`.
+</Warning>
+
+## Authentication configuration
+
+### For CBC mode ciphers
+
+CBC mode ciphers require a separate HMAC authentication:
+
+```bash
+# Set authentication algorithm
+auth SHA256
+
+# Or stronger
+auth SHA512
+```
+
+### Viewing available digests
+
+```bash
+# Show available HMAC algorithms
+openvpn --show-digests
+
+# Example output:
+SHA1
+SHA256
+SHA384
+SHA512
+MD5 (insecure)
+```
+
+### Recommended authentication algorithms
+
+| Algorithm | Output Size | Security | Status |
+|-----------|-------------|----------|--------|
+| SHA512 | 512-bit | Excellent | **Recommended** |
+| SHA384 | 384-bit | Excellent | **Recommended** |
+| SHA256 | 256-bit | Excellent | **Recommended** |
+| SHA1 | 160-bit | Weak | Deprecated |
+| MD5 | 128-bit | Broken | **Insecure** |
+
+<Note>
+For AEAD ciphers (GCM, CHACHA20-POLY1305), the `--auth` option is ignored as authentication is built into the cipher.
+</Note>
+
+## Backward compatibility
+
+### Supporting OpenVPN 2.4 clients
+
+OpenVPN 2.4 clients announce support for AES-256-GCM and AES-128-GCM by default:
+
+```bash
+# Server configuration to support 2.4 clients
+data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
+
+# Fallback for very old clients
+cipher AES-256-CBC
+auth SHA256
+```
+
+### Supporting OpenVPN 2.3 clients
+
+Older clients without negotiation support:
+
+```bash
+# Server must include client's cipher in data-ciphers
+data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC:BF-CBC
+
+# Match client's configured cipher
+cipher AES-256-CBC
+auth SHA256
+```
+
+### Supporting OpenVPN 3 clients
+
+OpenVPN 3-based clients (mobile apps):
+
+```bash
+# Server configuration
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+<Note>
+OpenVPN 3 clients always announce support for all AEAD ciphers and may disable legacy CBC ciphers.
+</Note>
+
+## Cipher negotiation scenarios
+
+### Example 1: Modern setup
+
+<CodeGroup>
+```bash Server Config
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+```
+
+```bash Client Config
+data-ciphers CHACHA20-POLY1305:AES-128-GCM:AES-256-GCM
+```
+</CodeGroup>
+
+**Result:** AES-256-GCM is selected (first match in server's list).
+
+### Example 2: Mixed environment
+
+<CodeGroup>
+```bash Server Config
+data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
+cipher AES-256-CBC
+auth SHA256
+```
+
+```bash Modern Client
+data-ciphers AES-256-GCM:AES-128-GCM
+```
+
+```bash Legacy Client (2.3)
+cipher AES-256-CBC
+auth SHA256
+```
+</CodeGroup>
+
+**Result:** 
+- Modern client uses AES-256-GCM (negotiated)
+- Legacy client uses AES-256-CBC (fallback)
+
+### Example 3: No common cipher
+
+<CodeGroup>
+```bash Server Config
+data-ciphers AES-256-GCM:AES-128-GCM
+```
+
+```bash Client Config
+data-ciphers CHACHA20-POLY1305:AES-256-CBC
+```
+</CodeGroup>
+
+**Result:** Connection rejected with `AUTH_FAILED,Data channel cipher negotiation failed`.
+
+## Blowfish deprecation
+
+Blowfish (BF-CBC) was the default cipher in OpenVPN 2.4 and earlier.
+
+<Warning>
+Blowfish is cryptographically weak and should not be used. OpenVPN 2.5+ does not allow BF-CBC unless explicitly configured.
+</Warning>
+
+### Migrating from Blowfish
+
+<Steps>
+  <Step title="Update server configuration">
+    ```bash
+    # Add modern ciphers while keeping BF-CBC temporarily
+    data-ciphers AES-256-GCM:AES-128-GCM:BF-CBC
+    cipher BF-CBC
+    auth SHA256
+    ```
+  </Step>
+  
+  <Step title="Update client configurations gradually">
+    ```bash
+    # New client configuration
+    data-ciphers AES-256-GCM:AES-128-GCM
+    ```
+  </Step>
+  
+  <Step title="Remove BF-CBC from server">
+    Once all clients are updated:
+    ```bash
+    data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+    ```
+  </Step>
+</Steps>
+
+## Performance considerations
+
+### Hardware acceleration
+
+Check if your CPU supports AES-NI:
+
+```bash
+# Check for AES-NI support
+grep -o 'aes' /proc/cpuinfo | head -1
+
+# Or more detailed
+lscpu | grep -i aes
+```
+
+### Cipher performance comparison
+
+| Cipher | With AES-NI | Without AES-NI | Mobile |
+|--------|-------------|----------------|--------|
+| AES-256-GCM | Excellent | Good | Good |
+| AES-128-GCM | Excellent | Good | Good |
+| CHACHA20-POLY1305 | Good | Good | Excellent |
+| AES-256-CBC | Very Good | Fair | Fair |
+
+<Note>
+On systems with AES-NI hardware acceleration, AES-GCM ciphers typically outperform CHACHA20-POLY1305. On mobile devices without AES-NI, CHACHA20-POLY1305 often performs better.
+</Note>
+
+### Benchmarking ciphers
+
+```bash
+# OpenSSL speed test
+openssl speed aes-256-gcm aes-128-gcm chacha20-poly1305
+
+# Test specific cipher performance
+openssl speed -evp aes-256-gcm
+```
+
+## Packet format and overhead
+
+### AEAD cipher packet format
+
+```
+[ Opcode/Key-ID ] [ Packet ID ] [ Auth Tag ] [ Encrypted Payload ]
+      1 byte          4 bytes       16 bytes       Variable
+```
+
+### CBC cipher packet format
+
+```
+[ HMAC ] [ IV ] [ Packet ID ] [ Encrypted Payload ]
+ 20-64    16         4              Variable
+ bytes   bytes     bytes
+```
+
+### Overhead calculation
+
+For AEAD ciphers:
+- Opcode: 1 byte
+- Packet ID: 4 bytes
+- Auth Tag: 16 bytes
+- **Total overhead: 21 bytes**
+
+For CBC ciphers:
+- HMAC: 20-64 bytes (depends on `--auth`)
+- IV: 16 bytes
+- Packet ID: 4 bytes
+- **Total overhead: 40-84 bytes**
+
+## Advanced configuration
+
+### Disabling cipher negotiation
+
+```bash
+# Force specific cipher without negotiation (not recommended)
+ncp-disable
+cipher AES-256-GCM
+```
+
+<Warning>
+Disabling NCP (cipher negotiation) prevents automatic cipher selection and reduces security flexibility.
+</Warning>
+
+### Compatibility mode
+
+```bash
+# Emulate OpenVPN 2.4 behavior
+compat-mode 2.4.x
+```
+
+### Testing cipher configuration
+
+```bash
+# Test configuration syntax
+openvpn --config test.conf --show-ciphers
+
+# Verify negotiated cipher in logs
+openvpn --config server.conf --verb 4 | grep -i cipher
+```
+
+## Security best practices
+
+1. **Use only AEAD ciphers** - AES-GCM and CHACHA20-POLY1305 provide best security
+
+2. **Prioritize by security** - List strongest ciphers first in `--data-ciphers`
+
+3. **Avoid deprecated ciphers** - Do not use BF-CBC, DES, or 3DES
+
+4. **Remove CBC mode** - Transition to AEAD-only when possible
+
+5. **Regular updates** - Keep OpenVPN updated to support latest ciphers
+
+6. **Test thoroughly** - Verify cipher negotiation works before deploying
+
+7. **Monitor logs** - Check which ciphers are actually being used
+
+8. **Document exceptions** - If supporting legacy ciphers, document why and when to remove
+
+## Troubleshooting
+
+### No shared cipher error
+
+**Error message:**
+```
+AUTH_FAILED,Data channel cipher negotiation failed (no shared cipher)
+```
+
+**Solutions:**
+- Add common cipher to both client and server `--data-ciphers`
+- Check cipher availability with `openvpn --show-ciphers`
+- Verify crypto library versions support the same ciphers
+
+### Cipher not available
+
+**Error message:**
+```
+Cipher algorithm 'CHACHA20-POLY1305' not found
+```
+
+**Solutions:**
+```bash
+# Check OpenSSL version (needs 1.1.0+)
+openssl version
+
+# Check cipher availability
+openssl list -cipher-algorithms | grep -i chacha
+
+# Upgrade OpenSSL if needed
+apt-get update && apt-get upgrade openssl
+```
+
+### Performance issues
+
+```bash
+# Check CPU features
+lscpu | grep -i flags | grep aes
+
+# Monitor CPU usage
+top -p $(pgrep openvpn)
+
+# Consider different cipher
+# With AES-NI: prefer AES-GCM
+# Without AES-NI: prefer CHACHA20-POLY1305
+```
+
+### Verify active cipher
+
+```bash
+# Check OpenVPN logs
+grep -i "data channel cipher" /var/log/openvpn.log
+
+# Or increase verbosity
+openvpn --config client.conf --verb 4 | grep -i cipher
+```
+
+## Migration guide
+
+### From legacy to modern ciphers
+
+<Steps>
+  <Step title="Audit current configuration">
+    ```bash
+    # Check current cipher
+    grep -E "cipher|data-ciphers" /etc/openvpn/*.conf
+    ```
+  </Step>
+  
+  <Step title="Update server first">
+    ```bash
+    # Add modern ciphers while keeping legacy
+    data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
+    cipher AES-256-CBC
+    auth SHA256
+    ```
+  </Step>
+  
+  <Step title="Update clients gradually">
+    ```bash
+    # Modern client configuration
+    data-ciphers AES-256-GCM:AES-128-GCM
+    ```
+  </Step>
+  
+  <Step title="Remove legacy ciphers">
+    After all clients updated:
+    ```bash
+    data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+    # Remove cipher and auth lines
+    ```
+  </Step>
+  
+  <Step title="Verify">
+    ```bash
+    # Check logs for cipher usage
+    grep "Data Channel" /var/log/openvpn.log
+    ```
+  </Step>
+</Steps>

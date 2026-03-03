@@ -1,0 +1,256 @@
+---
+title: OpenVPN architecture
+description: Learn how OpenVPN's internal architecture works, including event loops, packet processing, and the TUN/TAP interface integration
+---
+
+OpenVPN is designed as a robust VPN daemon that securely tunnels IP networks over a single TCP/UDP port with SSL/TLS-based session authentication and key exchange, packet encryption, packet authentication, and optional packet compression.
+
+## Core architecture overview
+
+OpenVPN's architecture follows a multi-layered event-driven design that separates control plane operations from data plane processing.
+
+### Main event loop structure
+
+The core of OpenVPN is built around a nested loop structure defined in `src/openvpn/openvpn.c:153`:
+
+```c
+/**
+ * OpenVPN's main init-run-cleanup loop.
+ * @ingroup eventloop
+ *
+ * This function contains the two outer OpenVPN loops. Its structure is
+ * as follows:
+ *  - Once-per-process initialization.
+ *  - Outer loop, run at startup and then once per \c SIGHUP:
+ *    - Level 1 initialization
+ *    - Inner loop, run at startup and then once per \c SIGUSR1:
+ *      - Call event loop function depending on client or server mode:
+ *        - \c tunnel_point_to_point()
+ *        - \c tunnel_server()
+ *    - Level 1 cleanup
+ *  - Once-per-process cleanup.
+ */
+```
+
+<Accordion title="Event loop implementation details">
+The event loop is implemented with different functions based on the operational mode:
+
+- **Point-to-point mode**: Uses `tunnel_point_to_point()` for single tunnel management
+- **Server mode**: Uses `tunnel_server()` for managing multiple client connections
+
+Each iteration of the event loop processes:
+- Timers and TLS operations via `pre_select()`
+- I/O events via `io_wait()`
+- Packet processing via `process_io()`
+</Accordion>
+
+### Component layers
+
+OpenVPN's architecture consists of several distinct layers:
+
+<Tabs>
+  <Tab title="Control plane">
+    **Control channel processing**
+    
+    The control channel handles:
+    - SSL/TLS session establishment
+    - Key exchange and renegotiation
+    - Authentication and authorization
+    - Configuration push/pull
+    
+    Managed by the `tls_multi_process()` function, which determines whether to call TLS process for active or untrusted sessions.
+  </Tab>
+  
+  <Tab title="Data plane">
+    **Data channel processing**
+    
+    The data channel handles:
+    - Packet encryption and decryption
+    - HMAC authentication
+    - Packet ID replay protection
+    - Compression (if enabled)
+    
+    Data packets flow through `openvpn_encrypt()` and `openvpn_decrypt()` functions defined in the crypto module.
+  </Tab>
+  
+  <Tab title="Network interface">
+    **TUN/TAP layer**
+    
+    The virtual network interface layer:
+    - Creates and manages TUN/TAP devices
+    - Reads packets from the virtual interface
+    - Writes decrypted packets to the interface
+    - Handles platform-specific implementations
+    
+    See the [TUN/TAP devices](#tuntap-virtual-network-interface) section below for details.
+  </Tab>
+</Tabs>
+
+## TUN/TAP virtual network interface
+
+OpenVPN uses TUN/TAP virtual network devices to create the VPN tunnel. These devices exist on most platforms and provide the interface between OpenVPN and the operating system's network stack.
+
+### Device types
+
+<Info>
+**TUN vs TAP**: OpenVPN with DCO (Data Channel Offload) supports Layer 3 (dev tun) only. TAP mode is only available in traditional userspace mode.
+</Info>
+
+The tunnel type is defined in `src/openvpn/tun.h:185`:
+
+```c
+struct tuntap
+{
+    #define TUNNEL_TYPE(tt) ((tt) ? ((tt)->type) : DEV_TYPE_UNDEF)
+    int type; /* DEV_TYPE_x as defined in proto.h */
+    
+    #define TUNNEL_TOPOLOGY(tt) ((tt) ? ((tt)->topology) : TOP_UNDEF)
+    int topology; /* one of the TOP_x values */
+    
+    /** The backend driver used for this tun/tap device. This can be
+     * one of the various windows drivers, "normal" tun/tap, utun, dco, ...
+     */
+    enum tun_driver_type backend_driver;
+}
+```
+
+### Backend driver types
+
+OpenVPN supports multiple backend drivers (`src/openvpn/tun.h:43`):
+
+- `DRIVER_GENERIC_TUNTAP` - Standard TUN/TAP driver on most Unix-like systems
+- `DRIVER_DCO` - Data Channel Offload (kernel-space packet processing)
+- `DRIVER_UTUN` - macOS internal tun driver
+- `DRIVER_AFUNIX` - AF_UNIX socket for external program integration
+- `WINDOWS_DRIVER_TAP_WINDOWS6` - Windows TAP driver
+- `DRIVER_NULL` - Null driver for testing
+
+<Note>
+With DCO enabled, data packets are processed directly in kernel space while OpenVPN userspace acts purely as a control plane application.
+</Note>
+
+### TUN/TAP operations
+
+Key operations on TUN/TAP devices:
+
+```c
+// Open the tunnel device
+void open_tun(const char *dev, const char *dev_type, 
+              const char *dev_node, struct tuntap *tt,
+              openvpn_net_ctx_t *ctx);
+
+// Read packets from the tunnel
+ssize_t read_tun(struct tuntap *tt, uint8_t *buf, int len);
+
+// Write packets to the tunnel
+ssize_t write_tun(struct tuntap *tt, uint8_t *buf, int len);
+
+// Close the tunnel device
+void close_tun(struct tuntap *tt, openvpn_net_ctx_t *ctx);
+```
+
+## Packet flow architecture
+
+Understanding the packet flow is crucial to understanding OpenVPN's architecture:
+
+### Outgoing packet flow
+
+1. **Application** → writes packet to TUN/TAP interface
+2. **OS kernel** → delivers packet to OpenVPN via `read_tun()`
+3. **OpenVPN** → encrypts packet via `openvpn_encrypt()`
+4. **OpenVPN** → adds packet ID and HMAC
+5. **OpenVPN** → sends encrypted packet via UDP/TCP socket
+6. **Network** → delivers to remote peer
+
+### Incoming packet flow
+
+1. **Network** → receives encrypted packet via UDP/TCP socket
+2. **OpenVPN** → validates HMAC and packet ID
+3. **OpenVPN** → decrypts packet via `openvpn_decrypt()`
+4. **OpenVPN** → writes plaintext packet via `write_tun()`
+5. **OS kernel** → delivers to application via TUN/TAP interface
+6. **Application** → receives packet
+
+<Warning>
+Packets that fail HMAC verification or replay detection are silently dropped to prevent information leakage to potential attackers.
+</Warning>
+
+## Initialization sequence
+
+OpenVPN follows a carefully orchestrated initialization sequence:
+
+1. **Program-wide initialization** (`init_static()`)
+   - Initialize cryptographic library (OpenSSL/mbedTLS)
+   - Set up signal handling
+   - Initialize random number generators
+
+2. **Parse configuration** (`parse_argv()`)
+   - Read command-line options
+   - Parse configuration file
+   - Process plugin-contributed options
+
+3. **Early initialization** (`init_early()`)
+   - Initialize network context
+   - Load OpenSSL providers
+   - Set verbosity and mute levels
+
+4. **Context initialization** (`context_init_1()`)
+   - Set up TLS context
+   - Initialize management interface
+   - Query passwords if needed
+
+5. **Run tunnel** (mode-dependent)
+   - Point-to-point: `tunnel_point_to_point()`
+   - Server: `tunnel_server()`
+
+<Tip>
+The initialization sequence can be interrupted by signals. SIGHUP triggers a restart from the outer loop, while SIGUSR1 restarts from the inner loop, allowing configuration reload without full restart.
+</Tip>
+
+## Signal handling
+
+OpenVPN responds to various signals during operation:
+
+- **SIGHUP** - Restart with configuration reload (outer loop)
+- **SIGUSR1** - Soft restart without configuration reload (inner loop)  
+- **SIGTERM/SIGINT** - Graceful shutdown
+- **SIGUSR2** - Connection reset (P2P mode) or status output
+
+Signal processing is integrated into the event loop via `P2P_CHECK_SIG()` macro calls.
+
+## Memory and resource management
+
+OpenVPN uses a garbage collector pattern for memory management:
+
+```c
+// Initialize garbage collector scoped to context object
+gc_init(&c.gc);
+
+// ... allocate resources ...
+
+// Clean up all resources at once
+gc_reset(&c.gc);
+```
+
+This approach ensures that resources allocated during a connection are properly cleaned up even when errors occur.
+
+## Data Channel Offload (DCO)
+
+<Info>
+DCO support was added in OpenVPN 2.6.0+ for Linux and Windows, with the Linux `ovpn` kernel module merged upstream in Linux 6.16.
+</Info>
+
+With DCO enabled:
+- Data packets are processed in kernel space
+- Userspace OpenVPN acts as control plane only
+- Significantly improved performance
+- Lower CPU overhead
+- Only AEAD ciphers supported (AES-GCM, ChaCha20-Poly1305)
+
+DCO is automatically detected and enabled when available. Use `--disable-dco` to disable it.
+
+## Related documentation
+
+- [Tunneling modes](/concepts/tunneling-modes) - Point-to-point vs client-server modes
+- [Authentication](/concepts/authentication) - Authentication methods and mechanisms
+- [Encryption](/concepts/encryption) - Encryption and cipher information

@@ -1,0 +1,333 @@
+---
+title: Configuration file format and structure
+description: Learn about OpenVPN configuration file syntax, structure, and best practices for organizing your VPN setup
+---
+
+## Configuration file basics
+
+OpenVPN uses plain text configuration files with a simple key-value syntax. Configuration files can be used for both client and server setups, with each line representing a single configuration directive.
+
+### File format
+
+Configuration files follow these basic rules:
+
+- Each line contains one configuration option
+- Options are specified without the leading `--` prefix
+- Comments are preceded with `#` or `;`
+- Options can span multiple lines for complex configurations
+- Whitespace is used to separate parameters
+
+<Note>
+When using `openvpn file.conf`, the `--config` prefix is automatically implied.
+</Note>
+
+### Example configuration structure
+
+```conf
+# Sample OpenVPN configuration file
+# Comments explain each section
+
+# Connection settings
+remote vpn.example.com 1194
+proto udp
+dev tun
+
+# Authentication
+ca ca.crt
+cert client.crt
+key client.key
+
+# Security options
+remote-cert-tls server
+verb 3
+```
+
+## Quoting and escaping
+
+OpenVPN supports both double quotes (`""`) and single quotes (`''`) for enclosing parameters that contain whitespace.
+
+<CodeGroup>
+```conf Windows paths
+# Use double backslashes for Windows paths
+ca "C:\\Program Files\\OpenVPN\\config\\ca.crt"
+key "C:\\Program Files\\OpenVPN\\config\\client.key"
+```
+
+```conf Unix paths
+# Unix paths with spaces
+ca "/etc/openvpn/my configs/ca.crt"
+key "/etc/openvpn/my configs/client.key"
+```
+</CodeGroup>
+
+### Special character escaping
+
+OpenVPN 2.0 and higher performs backslash-based shell escaping:
+
+| Sequence | Result |
+|----------|--------|
+| `\\` | Single backslash character (`\`) |
+| `\"` | Literal doublequote character (`"`) |
+| `\[SPACE]` | Literal space or tab character |
+
+## File organization
+
+OpenVPN configuration files can be organized in several ways:
+
+### Inline configuration
+
+Certificates and keys can be embedded directly in the configuration file using XML-style tags:
+
+```conf
+<ca>
+-----BEGIN CERTIFICATE-----
+MIIDSzCCAjOgAwIBAgIUX8epKBSVabk...
+-----END CERTIFICATE-----
+</ca>
+
+<cert>
+-----BEGIN CERTIFICATE-----
+MIIDZTCCAk2gAwIBAgIRAMfvQu8zMu...
+-----END CERTIFICATE-----
+</cert>
+
+<key>
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgw...
+-----END PRIVATE KEY-----
+</key>
+```
+
+<Note>
+Inline configurations are particularly useful for mobile clients and when you want a single `.ovpn` file for easy distribution.
+</Note>
+
+### Nested configuration files
+
+Configuration files can be nested to organize complex setups:
+
+```conf
+# Main configuration
+config /etc/openvpn/base-settings.conf
+config /etc/openvpn/security-settings.conf
+```
+
+<Warning>
+Configuration file nesting is limited to a reasonable depth to prevent infinite loops and stack overflow.
+</Warning>
+
+## Configuration syntax
+
+### Command-line equivalence
+
+Each line in a configuration file corresponds to a command-line option without the leading `--`:
+
+<Tabs>
+  <Tab title="Command line">
+    ```bash
+    openvpn --remote server.example.com --port 1194 --proto udp --dev tun
+    ```
+  </Tab>
+  <Tab title="Configuration file">
+    ```conf
+    remote server.example.com
+    port 1194
+    proto udp
+    dev tun
+    ```
+  </Tab>
+</Tabs>
+
+### Multi-value options
+
+Some options can be specified multiple times:
+
+```conf
+# Multiple remote servers for redundancy
+remote primary.example.com 1194
+remote backup.example.com 1194
+remote failover.example.com 1194
+
+# Load-balance between servers
+remote-random
+```
+
+### Optional parameters
+
+Many directives have optional parameters with sensible defaults:
+
+```conf
+# Basic form (uses defaults)
+status openvpn-status.log
+
+# With optional update interval (seconds)
+status openvpn-status.log 60
+```
+
+## Configuration file locations
+
+### Default paths
+
+OpenVPN searches for configuration files in platform-specific locations:
+
+| Platform | Default Location |
+|----------|------------------|
+| Linux | `/etc/openvpn/` |
+| Windows | `C:\Program Files\OpenVPN\config\` |
+| macOS | `/usr/local/etc/openvpn/` |
+
+### Changing the working directory
+
+Use `--cd` to change the working directory before reading configuration files:
+
+```conf
+cd /etc/openvpn/configs
+# All relative paths now start from this directory
+ca keys/ca.crt
+cert keys/client.crt
+key keys/client.key
+```
+
+## Common configuration patterns
+
+### Minimal client configuration
+
+```conf
+client
+remote vpn.example.com 1194
+dev tun
+proto udp
+ca ca.crt
+cert client.crt
+key client.key
+remote-cert-tls server
+```
+
+### Minimal server configuration
+
+```conf
+port 1194
+proto udp
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+server 10.8.0.0 255.255.255.0
+topology subnet
+keepalive 10 120
+```
+
+## Configuration validation
+
+Before deploying a configuration, validate it using:
+
+```bash
+openvpn --config myconfig.conf --test-crypto
+```
+
+This tests the configuration without establishing a connection.
+
+## Platform-specific considerations
+
+### Windows
+
+<Steps>
+  <Step title="Use .ovpn extension">
+    Rename configuration files from `.conf` to `.ovpn` for better Windows integration:
+    ```
+    client.conf → client.ovpn
+    ```
+  </Step>
+  <Step title="Quote pathnames with spaces">
+    Always use double quotes and double backslashes:
+    ```conf
+    ca "C:\\Program Files\\OpenVPN\\config\\ca.crt"
+    ```
+  </Step>
+  <Step title="Specify TAP adapter name">
+    If you have multiple network adapters:
+    ```conf
+    dev-node "Local Area Connection 2"
+    ```
+  </Step>
+</Steps>
+
+### Linux/Unix
+
+- Configuration files should be readable only by the OpenVPN user
+- Private keys should have restrictive permissions (600)
+- Use absolute paths for security-sensitive files when using `--chroot`
+
+```bash
+chmod 600 /etc/openvpn/client.key
+chmod 644 /etc/openvpn/client.conf
+```
+
+## Security best practices
+
+<Warning>
+Never commit configuration files with embedded keys or passwords to version control systems.
+</Warning>
+
+### Protecting sensitive data
+
+<Steps>
+  <Step title="Restrict file permissions">
+    Set appropriate permissions on configuration files:
+    ```bash
+    chmod 600 /etc/openvpn/*.key
+    chmod 644 /etc/openvpn/*.conf
+    ```
+  </Step>
+  <Step title="Use separate files for credentials">
+    Instead of embedding passwords in config files:
+    ```conf
+    auth-user-pass credentials.txt
+    ```
+  </Step>
+  <Step title="Enable privilege dropping">
+    Run OpenVPN with minimal privileges:
+    ```conf
+    user openvpn
+    group openvpn
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting configuration issues
+
+### Increase verbosity
+
+Set the verbosity level to see detailed configuration parsing:
+
+```conf
+verb 5  # 0=silent, 3=normal, 5-6=debug, 9=extremely verbose
+```
+
+### Common parsing errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| "Unrecognized option" | Typo or unsupported directive | Check spelling and OpenVPN version |
+| "Parse error" | Incorrect syntax | Check quoting and escaping |
+| "Cannot open file" | Wrong path or permissions | Verify file exists and is readable |
+
+### Using ignore-unknown-option
+
+For compatibility across OpenVPN versions:
+
+```conf
+# Allow newer options to be ignored by older clients
+ignore-unknown-option dns
+ignore-unknown-option dns server
+```
+
+<Note>
+Use `--ignore-unknown-option` with caution, as it may hide configuration errors.
+</Note>
+
+## Next steps
+
+- [Client setup guide](/configuration/client-setup) - Configure OpenVPN clients
+- [Server setup guide](/configuration/server-setup) - Configure OpenVPN servers  
+- [Options reference](/configuration/options-reference) - Complete list of configuration options

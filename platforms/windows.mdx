@@ -1,0 +1,286 @@
+---
+title: Windows
+description: Windows-specific installation and setup information for OpenVPN
+---
+
+OpenVPN provides comprehensive Windows support with modern kernel drivers and integration with Windows security features.
+
+## Platform status
+
+Windows is a **Tier 1 platform** - actively tested for every source commit.
+
+**Supported versions:**
+- Windows 7 and newer (client)
+- Windows Server 2012 and newer (server)
+
+## TUN/TAP driver
+
+OpenVPN requires a TUN/TAP kernel driver to function on Windows.
+
+<Info>
+OpenVPN installers include the necessary drivers, so manual installation is typically not required.
+</Info>
+
+### Available drivers
+
+Starting from Windows 10 2004 / Windows Server 2022, OpenVPN supports multiple driver options:
+
+<Tabs>
+  <Tab title="ovpn-dco-win (Default)">
+    **Data Channel Offload driver** - Provides kernel-level acceleration for improved performance.
+
+    **Requirements:**
+    - Windows 10 2004+ / Windows Server 2022+
+    - Included in OpenVPN 2.6.0+ installers
+    - Supports both client and server mode (server mode requires OpenVPN 2.7+)
+
+    **Features:**
+    - Kernel-level data packet processing
+    - Significantly improved performance
+    - Epoch data channel support (OpenVPN 2.8.0+)
+  </Tab>
+  
+  <Tab title="tap-windows6">
+    **Traditional TAP driver** - Used as fallback when DCO is not compatible.
+
+    **When used:**
+    - Configurations incompatible with DCO
+    - Explicitly requested with `--disable-dco`
+    - TAP mode (layer 2) connections
+  </Tab>
+</Tabs>
+
+<Note>
+OpenVPN automatically selects ovpn-dco if all configuration options are compatible, with automatic fallback to tap-windows6 if needed.
+</Note>
+
+### Driver selection
+
+The `--windows-driver` option is kept for backward compatibility but is now ignored. To force TAP driver usage:
+
+```bash
+openvpn --config myconfig.ovpn --disable-dco
+```
+
+## Installation
+
+Official OpenVPN installers are available at:
+- https://openvpn.net/community-downloads/
+- https://build.openvpn.net/downloads/snapshots/github-actions/openvpn2/ (snapshots)
+
+The installer includes:
+- OpenVPN executable
+- ovpn-dco-win driver
+- tap-windows6 driver
+- OpenVPN GUI
+- Interactive service
+
+## Windows services
+
+OpenVPN provides two service implementations for different use cases.
+
+### Interactive service
+
+The OpenVPNServiceInteractive allows unprivileged users to manage VPN connections.
+
+**Features:**
+- Starts automatically at system startup
+- No administrator privileges required for users
+- Integrates with OpenVPN GUI
+- Required for ovpn-dco-win driver
+- Handles privileged operations (NRPT, WFP filters, adapter creation)
+
+**Configuration locations:**
+- Global: `C:\Program Files\OpenVPN\config`
+- Per-user: `%USERPROFILE%\OpenVPN\config` (for Administrators or "OpenVPN Administrator" group)
+
+<Warning>
+The interactive service is required for ovpn-dco-win driver functionality and NRPT-based DNS configuration.
+</Warning>
+
+### Automatic service
+
+OpenVPNService is designed for VPN connections that should run continuously.
+
+**Features:**
+- Runs as unprivileged user (`NT SERVICE\OpenVPNService`) since OpenVPN 2.7
+- Automatically restarts crashed OpenVPN processes
+- Delegates privileged tasks to interactive service
+- Suitable for always-on VPN configurations
+
+<Note>
+If using Windows Certificate Store (cryptoapi), ensure certificates are readable by `NT SERVICE\OpenVPNService`.
+</Note>
+
+## Windows-specific features
+
+### Network adapter management
+
+OpenVPN 2.7+ automatically creates network adapters on demand. Manual adapter creation is no longer required for running multiple simultaneous connections.
+
+### DNS configuration (NRPT)
+
+OpenVPN 2.7+ uses Name Resolution Policy Table (NRPT) for DNS configuration.
+
+**Benefits:**
+- Native split-DNS support
+- DNSSEC support
+- Better compatibility with local DNS resolvers
+- No DNS leaks
+
+**Requirement:** Interactive service must be running
+
+### DNS leak prevention
+
+**`--block-outside-dns`** prevents DNS leaks by blocking TCP/UDP port 53 access except for tunnel traffic.
+
+```bash
+openvpn --config myconfig.ovpn --block-outside-dns
+```
+
+**Requirements:**
+- Windows Vista or later
+- Uses Windows Filtering Platform (WFP)
+
+<Warning>
+This option causes a fatal error on Windows XP. Use `--setenv opt` or `--ignore-unknown-option` to handle compatibility.
+</Warning>
+
+### Local network protection
+
+The `block-local` flag (used with `--redirect-gateway`) is enforced via Windows Firewall (WFP filters) to prevent TunnelCrack-style attacks.
+
+### IP address configuration methods
+
+The `--ip-win32` option controls how IP addresses are set on TAP adapters:
+
+<Tabs>
+  <Tab title="adaptive (Default)">
+    Tries `dynamic` method first, falls back to `netsh` if DHCP negotiation fails within 20 seconds.
+  </Tab>
+  
+  <Tab title="dynamic">
+    Uses DHCP protocol to set IP address. Requires TAP adapter set to "Obtain an IP address automatically".
+  </Tab>
+  
+  <Tab title="netsh">
+    Uses Windows `netsh` command to set static IP address.
+  </Tab>
+  
+  <Tab title="ipapi">
+    Uses Windows IP Helper API to set IP address.
+  </Tab>
+</Tabs>
+
+### Certificate store integration
+
+**`--cryptoapicert`** allows using certificates from Windows Certificate System Store with smart cards.
+
+**Selection methods:**
+```bash
+# By subject
+--cryptoapicert "SUBJ:John Doe"
+
+# By thumbprint
+--cryptoapicert "THUMB:f6 49 24 41 01 b4 ..."
+
+# By issuer
+--cryptoapicert "ISSUER:Sample CA"
+
+# By template name/OID
+--cryptoapicert "TMPL:Name of Template"
+```
+
+## Windows DCO (ovpn-dco-win)
+
+### Requirements
+
+- Windows 10 2004+ / Windows Server 2022+
+- OpenVPN 2.6.0+ (client and P2P mode)
+- OpenVPN 2.7+ (server mode)
+- OpenVPN 2.8.0+ (epoch data channel support)
+
+### Limitations
+
+<Warning>
+Windows DCO has the following limitations:
+</Warning>
+
+- **Layer 3 only** (dev tun)
+- **AEAD ciphers only**: ChaCha20-Poly1305 (Windows 11+), AES-GCM-128/192/256
+- **No compression support**
+- **Client and P2P mode only** (server mode in OpenVPN 2.7+)
+- **OpenVPN 2.4.0+ peers required**
+- ChaCha20-Poly1305 requires Windows 11
+
+### Automatic DCO selection
+
+OpenVPN automatically enables DCO if:
+1. All configuration options are DCO-compatible
+2. ovpn-dco-win driver is installed
+3. DCO is not explicitly disabled
+
+Incompatible options trigger automatic fallback to tap-windows6.
+
+## Utility commands
+
+### Show available adapters
+
+```bash
+openvpn --show-adapters
+```
+
+### Show routing table and adapter list
+
+```bash
+openvpn --show-net
+```
+
+### Adapter management with tapctl
+
+The `tapctl.exe` utility manages both TAP and Win-DCO adapters:
+
+```bash
+# List all adapters
+tapctl.exe list
+
+# Create new adapter (defaults to ovpn-dco)
+tapctl.exe create
+
+# Create specific adapter type
+tapctl.exe create --hwid tap0901
+```
+
+## Best practices
+
+1. **Use interactive service** for most deployments
+2. **Enable DCO** for best performance (automatic by default)
+3. **Use `--block-outside-dns`** to prevent DNS leaks
+4. **Configure certificates** for `NT SERVICE\OpenVPNService` when using automatic service
+5. **Use NRPT** for DNS (automatic with interactive service)
+
+## Common issues
+
+### Certificates not accessible by service
+
+If using `--cryptoapicert` with the automatic service, ensure certificates are readable by `NT SERVICE\OpenVPNService`:
+
+1. Open Certificate Manager (certmgr.msc)
+2. Right-click certificate → All Tasks → Manage Private Keys
+3. Add `NT SERVICE\OpenVPNService` with Read permissions
+
+### DCO not working
+
+Verify DCO driver is installed:
+```bash
+tapctl.exe list
+```
+
+Look for adapters with hwid containing "ovpn-dco".
+
+### DNS not updating
+
+Ensure OpenVPNServiceInteractive is running:
+```bash
+sc query OpenVPNServiceInteractive
+```

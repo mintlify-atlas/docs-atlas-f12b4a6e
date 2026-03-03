@@ -1,0 +1,507 @@
+---
+title: Certificate management
+description: Generate, manage, and maintain OpenVPN certificates and certificate authorities using easy-rsa and OpenSSL
+---
+
+## Overview
+
+OpenVPN uses X.509 certificates for authentication in TLS mode. Each peer requires its own certificate signed by a trusted Certificate Authority (CA). This guide covers certificate generation, management, and best practices.
+
+## Certificate requirements
+
+A complete OpenVPN PKI (Public Key Infrastructure) consists of:
+
+- **CA certificate and key** - Signs all peer certificates
+- **Server certificate and key** - One per OpenVPN server
+- **Client certificates and keys** - One per client
+- **Diffie-Hellman parameters** - For key exchange (optional with modern ECDH)
+
+## Using easy-rsa
+
+The OpenVPN project provides easy-rsa for managing RSA certificates and keys:
+
+<Note>
+Official repository: https://github.com/OpenVPN/easy-rsa
+</Note>
+
+### Installing easy-rsa
+
+```bash
+# Clone the repository
+git clone https://github.com/OpenVPN/easy-rsa.git
+cd easy-rsa/easyrsa3
+
+# Or install via package manager
+apt-get install easy-rsa  # Debian/Ubuntu
+yum install easy-rsa      # RHEL/CentOS
+```
+
+### Initializing the PKI
+
+<Steps>
+  <Step title="Initialize PKI directory">
+    ```bash
+    ./easyrsa init-pki
+    ```
+    This creates the `pki` directory structure for storing certificates and keys.
+  </Step>
+  
+  <Step title="Build Certificate Authority">
+    ```bash
+    # Create CA with interactive prompts
+    ./easyrsa build-ca
+    
+    # Or create CA without password (not recommended for production)
+    ./easyrsa build-ca nopass
+    ```
+    This generates:
+    - `pki/ca.crt` - CA certificate (distribute to all peers)
+    - `pki/private/ca.key` - CA private key (keep secure!)
+  </Step>
+  
+  <Step title="Generate Diffie-Hellman parameters (optional)">
+    ```bash
+    ./easyrsa gen-dh
+    ```
+    Generates `pki/dh.pem`. For modern setups, you can skip this and use `dh none` in OpenVPN configuration to rely on ECDH.
+  </Step>
+</Steps>
+
+### Generating server certificates
+
+<Steps>
+  <Step title="Generate server certificate request and key">
+    ```bash
+    # With password protection
+    ./easyrsa gen-req server
+    
+    # Without password (for automated restarts)
+    ./easyrsa gen-req server nopass
+    ```
+  </Step>
+  
+  <Step title="Sign the server certificate">
+    ```bash
+    ./easyrsa sign-req server server
+    ```
+    This generates `pki/issued/server.crt`.
+  </Step>
+  
+  <Step title="Verify the certificate">
+    ```bash
+    openssl verify -CAfile pki/ca.crt pki/issued/server.crt
+    ```
+  </Step>
+</Steps>
+
+### Generating client certificates
+
+<Steps>
+  <Step title="Generate client certificate request">
+    ```bash
+    # Replace 'client1' with unique client identifier
+    ./easyrsa gen-req client1 nopass
+    ```
+  </Step>
+  
+  <Step title="Sign the client certificate">
+    ```bash
+    ./easyrsa sign-req client client1
+    ```
+  </Step>
+  
+  <Step title="Package client files">
+    Each client needs:
+    - `pki/ca.crt` (CA certificate)
+    - `pki/issued/client1.crt` (client certificate)
+    - `pki/private/client1.key` (client private key)
+  </Step>
+</Steps>
+
+### Batch generation for multiple clients
+
+```bash
+#!/bin/bash
+# Generate certificates for multiple clients
+
+for client in client1 client2 client3; do
+    ./easyrsa gen-req $client nopass
+    ./easyrsa sign-req client $client
+    echo "Generated certificate for $client"
+done
+```
+
+## Using OpenSSL directly
+
+For more control, you can use OpenSSL commands directly.
+
+### Creating a Certificate Authority
+
+<Steps>
+  <Step title="Generate CA private key and certificate">
+    ```bash
+    openssl req -nodes -new -x509 -keyout ca.key -out ca.crt -days 3650
+    ```
+    
+    You'll be prompted for:
+    - Country Name (2 letter code)
+    - State or Province Name
+    - Locality Name (city)
+    - Organization Name
+    - Organizational Unit Name
+    - Common Name (e.g., "OpenVPN CA")
+    - Email Address
+  </Step>
+  
+  <Step title="Set up certificate management files">
+    ```bash
+    # Create index file for tracking certificates
+    touch index.txt
+    
+    # Create serial number file
+    echo 01 > serial
+    ```
+  </Step>
+  
+  <Step title="Configure openssl.cnf">
+    Edit your OpenSSL configuration file (typically `/usr/share/ssl/openssl.cnf`) to point to your CA certificate location.
+  </Step>
+</Steps>
+
+### Generating server certificate with OpenSSL
+
+<Steps>
+  <Step title="Generate private key and CSR">
+    ```bash
+    openssl req -nodes -new -keyout server.key -out server.csr
+    ```
+  </Step>
+  
+  <Step title="Sign the CSR with CA">
+    ```bash
+    openssl ca -out server.crt -in server.csr
+    ```
+    
+    The certificate signing request can be transferred over insecure channels (email, etc.) to the CA.
+  </Step>
+  
+  <Step title="Copy certificate back to server">
+    Transfer `server.crt` back to the server where the CSR was generated.
+  </Step>
+</Steps>
+
+### Generating client certificate with OpenSSL
+
+```bash
+# Generate key and CSR
+openssl req -nodes -new -keyout client.key -out client.csr
+
+# Sign with CA
+openssl ca -out client.crt -in client.csr
+```
+
+### Generating Diffie-Hellman parameters
+
+```bash
+# Generate 2048-bit DH parameters (recommended minimum)
+openssl dhparam -out dh2048.pem 2048
+
+# Generate 4096-bit DH parameters (more secure, slower)
+openssl dhparam -out dh4096.pem 4096
+```
+
+<Note>
+Generating DH parameters can take several minutes, especially for 4096-bit keys. Consider using `dh none` to rely on modern ECDH key exchange instead.
+</Note>
+
+## Certificate formats
+
+### PEM format
+
+PEM (Privacy Enhanced Mail) is the default format for OpenVPN certificates:
+
+```
+-----BEGIN CERTIFICATE-----
+MIIDXTCCAkWgAwIBAgIJAKJ3X7X...
+...
+-----END CERTIFICATE-----
+```
+
+### PKCS#12 format
+
+PKCS#12 bundles the private key, certificate, and CA certificate in a single file:
+
+```bash
+# Create PKCS#12 bundle
+openssl pkcs12 -export -out client.p12 \
+    -inkey client.key \
+    -in client.crt \
+    -certfile ca.crt
+
+# OpenVPN configuration
+pkcs12 /etc/openvpn/client.p12
+```
+
+<Warning>
+PKCS#12 is not available with mbed TLS builds of OpenVPN.
+</Warning>
+
+### Certificate URIs
+
+OpenVPN 3.0+ with OpenSSL 3.0+ supports certificate URIs:
+
+```bash
+# File URI
+cert file:/etc/openvpn/certs/server.crt
+
+# PKCS#11 URI (with pkcs11-provider)
+cert "pkcs11:token=MyToken;object=MyCert"
+```
+
+## Certificate revocation
+
+### Creating a Certificate Revocation List (CRL)
+
+With easy-rsa:
+
+<Steps>
+  <Step title="Revoke a certificate">
+    ```bash
+    ./easyrsa revoke client1
+    ```
+  </Step>
+  
+  <Step title="Generate CRL">
+    ```bash
+    ./easyrsa gen-crl
+    ```
+    This creates `pki/crl.pem`.
+  </Step>
+  
+  <Step title="Configure OpenVPN to use CRL">
+    ```bash
+    # Server configuration
+    crl-verify /etc/openvpn/crl.pem
+    ```
+  </Step>
+  
+  <Step title="Update CRL regularly">
+    After revoking additional certificates, regenerate the CRL:
+    ```bash
+    ./easyrsa gen-crl
+    ```
+  </Step>
+</Steps>
+
+With OpenSSL:
+
+```bash
+# Revoke certificate
+openssl ca -revoke pki/issued/client1.crt
+
+# Generate CRL
+openssl ca -gencrl -out crl.pem
+```
+
+### Using CRL directory mode
+
+```bash
+# Create directory for revoked serial numbers
+mkdir /etc/openvpn/crl-dir
+
+# Add revoked certificate serial number as filename
+touch /etc/openvpn/crl-dir/1A2B3C4D
+
+# OpenVPN configuration
+crl-verify /etc/openvpn/crl-dir dir
+```
+
+## Certificate verification
+
+### Inspecting certificates
+
+```bash
+# View certificate details
+openssl x509 -in server.crt -text -noout
+
+# View certificate subject
+openssl x509 -in server.crt -subject -noout
+
+# View certificate issuer
+openssl x509 -in server.crt -issuer -noout
+
+# View certificate dates
+openssl x509 -in server.crt -dates -noout
+
+# Calculate certificate fingerprint (SHA256)
+openssl x509 -in server.crt -fingerprint -sha256 -noout
+```
+
+### Verifying certificate chain
+
+```bash
+# Verify certificate against CA
+openssl verify -CAfile ca.crt server.crt
+
+# Verify with intermediate certificates
+openssl verify -CAfile ca.crt -untrusted intermediate.crt server.crt
+```
+
+### Checking certificate expiration
+
+```bash
+# Show expiration date
+openssl x509 -in server.crt -noout -enddate
+
+# Check if certificate is expired
+openssl x509 -in server.crt -noout -checkend 0
+
+# Check if certificate expires in 30 days (2592000 seconds)
+openssl x509 -in server.crt -noout -checkend 2592000
+```
+
+## Advanced certificate features
+
+### Certificate key usage
+
+<CodeGroup>
+```bash Server Certificate
+# Server certificate should have:
+# - Key Usage: Digital Signature, Key Encipherment
+# - Extended Key Usage: TLS Web Server Authentication
+
+remote-cert-ku
+remote-cert-eku "TLS Web Server Authentication"
+```
+
+```bash Client Certificate
+# Client certificate should have:
+# - Key Usage: Digital Signature
+# - Extended Key Usage: TLS Web Client Authentication
+
+remote-cert-ku
+remote-cert-eku "TLS Web Client Authentication"
+```
+</CodeGroup>
+
+### Certificate tracking
+
+```bash
+# Track specific certificate attributes
+x509-track CN
+x509-track +CN              # Track for entire chain
+x509-track emailAddress
+x509-track serialNumber
+x509-track SHA256           # Track fingerprint
+
+# Track X.509v3 extensions
+x509-track basicConstraints
+x509-track subjectAltName
+```
+
+### Using alternative certificate fields
+
+```bash
+# Use email address as username
+x509-username-field emailAddress
+
+# Use subject alternative name
+x509-username-field ext:subjectAltName
+
+# Combine multiple fields
+x509-username-field CN serialNumber
+```
+
+## Certificate renewal
+
+<Steps>
+  <Step title="Generate new certificate request">
+    ```bash
+    ./easyrsa gen-req server nopass
+    ```
+  </Step>
+  
+  <Step title="Sign with existing CA">
+    ```bash
+    ./easyrsa sign-req server server
+    ```
+  </Step>
+  
+  <Step title="Replace old certificate">
+    ```bash
+    # Backup old certificate
+    cp /etc/openvpn/server.crt /etc/openvpn/server.crt.old
+    
+    # Install new certificate
+    cp pki/issued/server.crt /etc/openvpn/
+    ```
+  </Step>
+  
+  <Step title="Restart OpenVPN">
+    ```bash
+    systemctl restart openvpn@server
+    ```
+  </Step>
+</Steps>
+
+## Security best practices
+
+1. **Protect CA private key** - Store on offline system or in HSM
+
+2. **Use strong passwords** - Protect private keys with passwords when possible
+
+3. **Set appropriate lifetimes** - CA: 10+ years, Server: 2-5 years, Client: 1-2 years
+
+4. **Implement CRL checking** - Keep CRL updated and accessible
+
+5. **Use separate CA** - Don't use production CAs for testing
+
+6. **Regular key rotation** - Renew certificates before expiration
+
+7. **Verify certificate extensions** - Use `--remote-cert-tls` to verify key usage
+
+8. **Monitor certificate expiration** - Set up alerts for expiring certificates
+
+9. **Revoke compromised certificates** - Update CRL immediately when keys are compromised
+
+10. **Backup securely** - Encrypt backups of certificates and keys
+
+## Troubleshooting
+
+### Certificate verification errors
+
+**Error: "certificate has expired"**
+```bash
+# Check certificate validity period
+openssl x509 -in server.crt -noout -dates
+```
+
+**Error: "unable to get local issuer certificate"**
+- Verify CA certificate is correctly specified
+- Check for missing intermediate certificates
+- Use `--extra-certs` for intermediate certificates
+
+**Error: "certificate signature failure"**
+- Certificate not signed by specified CA
+- Verify CA certificate matches the one used for signing
+
+### Permission issues
+
+```bash
+# Ensure correct permissions on key files
+chmod 600 /etc/openvpn/*.key
+chmod 644 /etc/openvpn/*.crt
+
+# Ensure OpenVPN user can read files
+chown root:openvpn /etc/openvpn/*.key
+```
+
+### Testing certificates
+
+```bash
+# Test TLS connection with s_client
+openssl s_client -connect vpn.example.com:1194 \
+    -CAfile ca.crt \
+    -cert client.crt \
+    -key client.key
+```

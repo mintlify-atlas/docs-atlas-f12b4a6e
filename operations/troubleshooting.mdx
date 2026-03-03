@@ -1,0 +1,627 @@
+---
+title: Troubleshooting OpenVPN
+description: Common issues, error messages, and solutions for OpenVPN configuration and connectivity problems
+---
+
+This guide helps diagnose and resolve common OpenVPN issues.
+
+## Debugging approach
+
+<Steps>
+  <Step title="Increase verbosity">
+    Enable detailed logging to see what's happening:
+
+    ```bash
+    verb 4  # Good for troubleshooting
+    verb 5  # Shows packet read/write activity
+    ```
+
+    View output in real-time:
+    ```bash
+    tail -f /var/log/openvpn/server.log
+    # Or via systemd
+    journalctl -u openvpn-server@server -f
+    ```
+  </Step>
+
+  <Step title="Check process status">
+    Verify OpenVPN is running:
+
+    ```bash
+    systemctl status openvpn-server@server
+    ps aux | grep openvpn
+    ```
+  </Step>
+
+  <Step title="Verify configuration">
+    Test configuration syntax:
+
+    ```bash
+    openvpn --config /etc/openvpn/server.conf --test-crypto
+    ```
+  </Step>
+
+  <Step title="Check network connectivity">
+    Test basic connectivity before troubleshooting OpenVPN:
+
+    ```bash
+    # Ping server
+    ping server.example.com
+
+    # Check port accessibility
+    nc -zv server.example.com 1194
+    ```
+  </Step>
+</Steps>
+
+## Connection issues
+
+### Cannot connect to server
+
+<Accordion title="Symptom: Connection timeout">
+  **Error message**:
+  ```
+  TCP/UDP: Connection timeout
+  ```
+
+  **Common causes**:
+  - Firewall blocking OpenVPN port
+  - Incorrect server address or port
+  - Server not running
+  - NAT/routing issues
+
+  **Solutions**:
+
+  1. Verify server is listening:
+     ```bash
+     netstat -tulpn | grep openvpn
+     ss -tulpn | grep openvpn
+     ```
+
+  2. Check firewall rules:
+     ```bash
+     # iptables
+     iptables -L -n | grep 1194
+
+     # firewalld
+     firewall-cmd --list-all
+
+     # Add rule if needed
+     iptables -A INPUT -p udp --dport 1194 -j ACCEPT
+     firewall-cmd --add-port=1194/udp --permanent
+     ```
+
+  3. Test port connectivity:
+     ```bash
+     # UDP (requires ncat)
+     nc -zuv server.example.com 1194
+
+     # TCP
+     nc -zv server.example.com 1194
+     ```
+
+  4. Try alternate protocol:
+     ```bash
+     # If UDP fails, try TCP
+     remote server.example.com 443 tcp
+     ```
+</Accordion>
+
+<Accordion title="Symptom: Connection resets immediately">
+  **Error message**:
+  ```
+  TLS Error: TLS handshake failed
+  Connection reset, restarting
+  ```
+
+  **Common causes**:
+  - TLS auth key mismatch
+  - Certificate problems
+  - Incompatible cipher settings
+  - Server-side authentication failure
+
+  **Solutions**:
+
+  1. Verify TLS auth key matches:
+     ```bash
+     # Key must be identical on client and server
+     # Key direction must be opposite (0 on server, 1 on client)
+     
+     # Server
+     tls-auth ta.key 0
+     
+     # Client
+     tls-auth ta.key 1
+     ```
+
+  2. Check certificate validity:
+     ```bash
+     openssl x509 -in client.crt -text -noout | grep "Not After"
+     openssl verify -CAfile ca.crt client.crt
+     ```
+
+  3. Enable detailed TLS debugging:
+     ```bash
+     verb 5
+     # Look for "TLS Error" messages
+     ```
+</Accordion>
+
+### Authentication failures
+
+<Accordion title="Certificate verification failed">
+  **Error message**:
+  ```
+  VERIFY ERROR: depth=0, error=certificate verify failed
+  TLS Error: TLS object -> incoming plaintext read error
+  ```
+
+  **Solutions**:
+
+  1. Verify certificate chain:
+     ```bash
+     # Check if client cert is signed by CA
+     openssl verify -CAfile ca.crt client.crt
+     ```
+
+  2. Check CA certificate:
+     ```bash
+     # Ensure ca.crt is the same on client and server
+     md5sum ca.crt
+     ```
+
+  3. Verify certificate not expired:
+     ```bash
+     openssl x509 -in client.crt -noout -dates
+     ```
+
+  4. Check certificate purpose:
+     ```bash
+     # Server certificate should have server auth
+     openssl x509 -in server.crt -noout -purpose
+     ```
+
+  <Warning>
+    Common mistake: Using test certificates from OpenVPN examples in production. Always generate your own certificates.
+  </Warning>
+</Accordion>
+
+<Accordion title="Username/password authentication failed">
+  **Error message**:
+  ```
+  AUTH: Received control message: AUTH_FAILED
+  ```
+
+  **Solutions**:
+
+  1. Check server-side auth plugin/script:
+     ```bash
+     # Verify plugin is loaded
+     grep "auth-user-pass-verify" /etc/openvpn/server.conf
+     
+     # Test script manually
+     /etc/openvpn/auth-script.sh username password
+     ```
+
+  2. Enable auth retry on client:
+     ```bash
+     auth-retry interact  # Don't exit on auth failure
+     ```
+
+  3. Check management interface password queries:
+     ```bash
+     management-query-passwords
+     ```
+</Accordion>
+
+## OpenSSL 3.0 errors
+
+OpenVPN 2.6 with OpenSSL 3.0 may show security policy errors:
+
+<Accordion title="Error: ca md too weak">
+  **Error message**:
+  ```
+  OpenSSL: error:0A00018E:SSL routines::ca md too weak
+  Exiting due to fatal error
+  ```
+
+  **Cause**: Certificate uses weak hash algorithm (MD5 or SHA1)
+
+  **Solutions**:
+
+  1. **Preferred**: Regenerate certificates with stronger hash:
+     ```bash
+     # Use SHA256 or stronger
+     openssl req -new -key server.key -out server.csr -sha256
+     ```
+
+  2. **Temporary workaround**: Lower OpenSSL security level:
+     ```bash
+     # In OpenVPN config
+     tls-cipher DEFAULT:@SECLEVEL=0
+     ```
+
+  <Warning>
+    Lowering security level is a temporary solution. Update certificates as soon as possible.
+  </Warning>
+</Accordion>
+
+<Accordion title="Error: ee key too small">
+  **Error message**:
+  ```
+  OpenSSL: error:0A00018F:SSL routines::ee key too small
+  OpenSSL: error:1408518A:SSL routines:ssl3_ctx_ctrl:dh key too small
+  ```
+
+  **Cause**: RSA key or DH parameters too small (< 2048 bits)
+
+  **Solutions**:
+
+  1. **Preferred**: Generate larger keys:
+     ```bash
+     # 2048-bit minimum, 4096-bit recommended
+     openssl genrsa -out server.key 4096
+     openssl dhparam -out dh.pem 2048
+     ```
+
+  2. **Temporary workaround**:
+     ```bash
+     tls-cipher DEFAULT:@SECLEVEL=0
+     ```
+</Accordion>
+
+<Accordion title="Error: unsupported protocol">
+  **Error message**:
+  ```
+  TLS error: Unsupported protocol
+  OpenSSL: error:0A000102:SSL routines::unsupported protocol
+  ```
+
+  **Cause**: Client and server using incompatible TLS versions
+
+  **Solutions**:
+
+  1. Set compatible TLS version:
+     ```bash
+     tls-version-min 1.2
+     ```
+
+  2. Check both sides support same TLS version:
+     ```bash
+     # View supported versions
+     openvpn --show-tls
+     ```
+</Accordion>
+
+## Routing and connectivity issues
+
+<Accordion title="VPN connects but no internet access">
+  **Common causes**:
+  - Routing not configured
+  - NAT not enabled on server
+  - DNS not pushed to clients
+  - Firewall blocking forwarded traffic
+
+  **Solutions**:
+
+  1. Enable IP forwarding on server:
+     ```bash
+     echo 1 > /proc/sys/net/ipv4/ip_forward
+     
+     # Make persistent
+     echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+     sysctl -p
+     ```
+
+  2. Configure NAT/masquerading:
+     ```bash
+     # iptables
+     iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+     
+     # firewalld
+     firewall-cmd --add-masquerade --permanent
+     ```
+
+  3. Push routes and DNS to clients:
+     ```bash
+     # In server config
+     push "redirect-gateway def1 bypass-dhcp"
+     push "dhcp-option DNS 8.8.8.8"
+     push "dhcp-option DNS 8.8.4.4"
+     ```
+
+  4. Check routing table on client:
+     ```bash
+     ip route
+     # Should see default route via tun0
+     ```
+</Accordion>
+
+<Accordion title="Can ping VPN IP but not reach other clients">
+  **Cause**: Client-to-client communication not enabled
+
+  **Solution**:
+
+  1. Enable on server:
+     ```bash
+     client-to-client
+     ```
+
+  2. For DCO (Data Channel Offload):
+     ```bash
+     # DCO uses kernel routing table
+     # Add routes for client subnets
+     ip route add 10.8.0.0/24 via <client-vpn-ip>
+     ```
+
+  <Note>
+    With DCO, traditional `iroute` behavior changes. Packets always reach the tunnel interface and are re-routed based on system routing table.
+  </Note>
+</Accordion>
+
+<Accordion title="DNS not working through VPN">
+  **Solutions**:
+
+  1. Server pushes DNS:
+     ```bash
+     push "dhcp-option DNS 8.8.8.8"
+     ```
+
+  2. Client accepts DNS push:
+     ```bash
+     # Linux: Install resolvconf or openresolv
+     apt install resolvconf
+     
+     # Or use script to update resolv.conf
+     script-security 2
+     up /etc/openvpn/update-resolv-conf
+     down /etc/openvpn/update-resolv-conf
+     ```
+
+  3. Windows clients:
+     ```bash
+     # Use block-outside-dns to prevent DNS leaks
+     push "block-outside-dns"
+     ```
+</Accordion>
+
+## Performance problems
+
+<Accordion title="Slow throughput">
+  **Diagnostic steps**:
+
+  1. Check verbosity level:
+     ```bash
+     # High verbosity kills performance
+     verb 3  # Not verb 5 or higher
+     ```
+
+  2. Verify cipher selection:
+     ```bash
+     # Check negotiated cipher in logs
+     grep "Data Channel:" /var/log/openvpn/server.log
+     
+     # Prefer AEAD ciphers
+     data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+     ```
+
+  3. Check compression (disable if possible):
+     ```bash
+     # Compression hurts performance and is incompatible with DCO
+     compress migrate  # Disable compression gracefully
+     ```
+
+  4. Consider DCO for better performance (see performance tuning section)
+
+  5. Check network MTU:
+     ```bash
+     # Test MTU size
+     ping -M do -s 1400 server.example.com
+     
+     # Adjust if needed
+     tun-mtu 1400
+     ```
+</Accordion>
+
+<Accordion title="High packet loss or latency">
+  **Solutions**:
+
+  1. Switch from TCP to UDP:
+     ```bash
+     # UDP has better performance
+     proto udp
+     ```
+
+  2. Adjust TCP window (if using TCP):
+     ```bash
+     tcp-nodelay
+     ```
+
+  3. Tune socket buffers:
+     ```bash
+     sndbuf 524288
+     rcvbuf 524288
+     ```
+
+  4. Check for replay warnings:
+     ```bash
+     # If many replay warnings on WiFi
+     mute-replay-warnings
+     ```
+</Accordion>
+
+## DCO (Data Channel Offload) issues
+
+<Accordion title="DCO not being used">
+  **Message**:
+  ```
+  Note: Kernel support for ovpn-dco missing, disabling data channel offload.
+  ```
+
+  **Causes**:
+  - Kernel module not loaded
+  - Incompatible configuration options
+  - OpenVPN not built with DCO support
+
+  **Solutions**:
+
+  1. Check kernel module:
+     ```bash
+     # Linux (kernel 6.16+)
+     lsmod | grep ovpn
+     
+     # Load module
+     modprobe ovpn
+     ```
+
+  2. Install ovpn-backports for older kernels:
+     ```bash
+     # See https://github.com/OpenVPN/ovpn-backports
+     ```
+
+  3. Verify OpenVPN built with DCO:
+     ```bash
+     openvpn --version | grep dco
+     
+     # Build with DCO support
+     ./configure --enable-dco
+     ```
+
+  4. Check for incompatible options:
+     ```bash
+     # DCO limitations:
+     # - Layer 3 (tun) only, no tap
+     # - No compression
+     # - AEAD ciphers only (AES-GCM, CHACHA20-POLY1305)
+     # - topology subnet required on server
+     ```
+</Accordion>
+
+<Accordion title="DCO P2P mode issues">
+  **Message**:
+  ```
+  P2P mode NCP negotiation result: DATA_v2=0
+  ```
+
+  **Cause**: DATA_V2 not enabled (required for DCO)
+
+  **Solution**:
+  
+  Ensure P2P peers negotiate DATA_V2:
+  ```bash
+  # Check log output
+  grep "P2P mode NCP" /var/log/openvpn/server.log
+  
+  # Should show:
+  # P2P mode NCP negotiation result: TLS_export=1, DATA_v2=1, peer-id 9484735, cipher=AES-256-GCM
+  ```
+
+  DATA_V2 requires OpenVPN 2.6+ on both sides.
+</Accordion>
+
+## Windows-specific issues
+
+<Accordion title="TAP adapter issues">
+  **Solutions**:
+
+  1. Reinstall TAP adapter:
+     ```cmd
+     cd "C:\Program Files\TAP-Windows\bin"
+     tapinstall remove tap0901
+     tapinstall install OemVista.inf tap0901
+     ```
+
+  2. Check adapter status:
+     ```cmd
+     netsh interface show interface
+     ```
+
+  3. Use DCO-Win driver (Windows 10 2004+):
+     ```bash
+     # Included in OpenVPN 2.6+ installers
+     # Provides better performance
+     ```
+</Accordion>
+
+<Accordion title="No console output">
+  **Solution**:
+
+  When running as service, use log files:
+  ```bash
+  log-append "C:\\Program Files\\OpenVPN\\log\\server.log"
+  ```
+</Accordion>
+
+## Configuration errors
+
+<Accordion title="Options with extra parameters">
+  **Error message**:
+  ```
+  Options error: option 'x' has extra parameters
+  ```
+
+  **Cause**: OpenVPN now exits with error for options with unexpected parameters
+
+  **Solution**: Check configuration syntax matches current version
+</Accordion>
+
+<Accordion title="Unrecognized options">
+  **Default behavior**: Warning but continues
+
+  **To make fatal**:
+  ```bash
+  # Add ! prefix to make option mandatory
+  !push "custom-option"
+  ```
+
+  **To ignore**: Options from push are warnings by default, not fatal errors
+</Accordion>
+
+## Getting help
+
+### Gathering diagnostic information
+
+When asking for help, provide:
+
+<Steps>
+  <Step title="Version information">
+    ```bash
+    openvpn --version
+    ```
+  </Step>
+
+  <Step title="Configuration files">
+    ```bash
+    # Remove sensitive information (keys, passwords)
+    cat /etc/openvpn/server.conf | grep -v "^#" | grep -v "^$"
+    ```
+  </Step>
+
+  <Step title="Verbose logs">
+    ```bash
+    # Enable verb 4 or 5
+    tail -100 /var/log/openvpn/server.log
+    ```
+  </Step>
+
+  <Step title="System information">
+    ```bash
+    uname -a
+    ip addr
+    ip route
+    iptables -L -n -v
+    ```
+  </Step>
+</Steps>
+
+### Resources
+
+- **Mailing lists**: Subscribe at https://community.openvpn.net/
+- **Bug tracker**: https://github.com/OpenVPN/openvpn/issues
+- **Community forums**: https://forums.openvpn.net/
+- **Wiki**: https://community.openvpn.net/openvpn/wiki
+- **IRC**: #openvpn on irc.libera.chat
+
+<Note>
+  When reporting bugs, include full logs with `verb 4` or `verb 5` and complete version information.
+</Note>

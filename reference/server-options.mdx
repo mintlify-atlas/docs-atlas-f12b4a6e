@@ -1,0 +1,676 @@
+---
+title: Server options
+description: Server-specific command line options for running OpenVPN in multi-client server mode
+---
+
+Starting with OpenVPN 2.0, a multi-client TCP/UDP server mode is supported, and can be enabled with the `--mode server` option. In server mode, OpenVPN will listen on a single port for incoming client connections. All client connections will be routed through a single tun or tap interface. This mode is designed for scalability and should be able to support hundreds or even thousands of clients on sufficiently fast hardware. SSL/TLS authentication must be used in this mode.
+
+## Server setup helpers
+
+<ParamField path="--server" type="string">
+  A helper directive designed to simplify the configuration of OpenVPN's server mode. This directive will set up an OpenVPN server which will allocate addresses to clients out of the given network/netmask.
+  
+  The server itself will take the `.1` address of the given network for use as the server-side endpoint of the local TUN/TAP interface. If the optional `nopool` flag is given, no dynamic IP address pool will prepared for VPN clients.
+  
+  ```bash
+  # Basic server setup
+  openvpn --server 10.8.0.0 255.255.255.0
+  
+  # Server without IP pool (for static IPs only)
+  openvpn --server 10.8.0.0 255.255.255.0 nopool
+  ```
+  
+  <Accordion title="What --server 10.8.0.0 255.255.255.0 expands to">
+  
+  ```
+  mode server
+  tls-server
+  push "topology [topology]"
+  
+  if dev tun AND (topology == net30 OR topology == p2p):
+    ifconfig 10.8.0.1 10.8.0.2
+    if !nopool:
+      ifconfig-pool 10.8.0.4 10.8.0.251
+    route 10.8.0.0 255.255.255.0
+    if client-to-client:
+      push "route 10.8.0.0 255.255.255.0"
+    else if topology == net30:
+      push "route 10.8.0.1"
+  
+  if dev tap OR (dev tun AND topology == subnet):
+    ifconfig 10.8.0.1 255.255.255.0
+    if !nopool:
+      ifconfig-pool 10.8.0.2 10.8.0.253 255.255.255.0
+    push "route-gateway 10.8.0.1"
+    if route-gateway unset:
+      route-gateway 10.8.0.2
+  ```
+  
+  </Accordion>
+  
+  <Note>
+  Don't use `--server` if you are ethernet bridging. Use `--server-bridge` instead.
+  </Note>
+</ParamField>
+
+<ParamField path="--server-bridge" type="string" optional>
+  A helper directive similar to `--server` which is designed to simplify the configuration of OpenVPN's server mode in ethernet bridging configurations.
+  
+  If `--server-bridge` is used without any parameters, it will enable a DHCP-proxy mode, where connecting OpenVPN clients will receive an IP address for their TAP adapter from the DHCP server running on the OpenVPN server-side LAN. The optional `nogw` flag (advanced) indicates that gateway information should not be pushed to the client.
+  
+  ```bash
+  # DHCP proxy mode
+  openvpn --server-bridge
+  
+  # DHCP proxy mode without gateway
+  openvpn --server-bridge nogw
+  
+  # With explicit pool
+  openvpn --server-bridge 10.8.0.4 255.255.255.0 10.8.0.128 10.8.0.254
+  ```
+  
+  <Accordion title="Setting up ethernet bridging">
+  
+  To configure ethernet bridging:
+  
+  1. Use your OS's bridging capability to bridge the TAP interface with the ethernet NIC interface:
+     - **Linux:** Use the `brctl` tool
+     - **Windows XP:** In the Network Connections Panel, select the ethernet and TAP adapters and right-click on "Bridge Connections"
+  
+  2. Manually set the IP/netmask on the bridge interface
+  
+  3. The `gateway` and `netmask` parameters to `--server-bridge` can be set to either:
+     - The IP/netmask of the bridge interface, or
+     - The IP/netmask of the default gateway/router on the bridged subnet
+  
+  4. Set aside an IP range in the bridged subnet (denoted by `pool-start-IP` and `pool-end-IP`) for OpenVPN to allocate to connecting clients
+  
+  </Accordion>
+</ParamField>
+
+<ParamField path="--server-ipv6" type="string">
+  Convenience-function to enable a number of IPv6 related options at once, namely `--ifconfig-ipv6`, `--ifconfig-ipv6-pool` and `--push tun-ipv6`.
+  
+  Pushing of the `--tun-ipv6` directive is done for older clients which require an explicit `--tun-ipv6` in their configuration.
+  
+  ```bash
+  openvpn --server-ipv6 fd00:abcd:1234::/64
+  ```
+</ParamField>
+
+## Client IP address allocation
+
+<ParamField path="--ifconfig-pool" type="string">
+  Set aside a pool of subnets to be dynamically allocated to connecting clients, similar to a DHCP server.
+  
+  For tun-style tunnels, each client will be given a /30 subnet (for interoperability with Windows clients). For tap-style tunnels, individual addresses will be allocated, and the optional `netmask` parameter will also be pushed to clients.
+  
+  ```bash
+  # TUN mode
+  openvpn --ifconfig-pool 10.8.0.4 10.8.0.251
+  
+  # TAP mode with netmask
+  openvpn --ifconfig-pool 10.8.0.2 10.8.0.253 255.255.255.0
+  ```
+</ParamField>
+
+<ParamField path="--ifconfig-ipv6-pool" type="string">
+  Specify an IPv6 address pool for dynamic assignment to clients.
+  
+  The pool starts at `ipv6addr` and matches the offset determined from the start of the IPv4 pool. If the host part of the given IPv6 address is `0`, the pool starts at `ipv6addr` +1.
+  
+  ```bash
+  openvpn --ifconfig-ipv6-pool fd00:abcd:1234::/64
+  ```
+</ParamField>
+
+<ParamField path="--ifconfig-pool-persist" type="string">
+  Persist/unpersist ifconfig-pool data to `file`, at `seconds` intervals, as well as on program startup and shutdown.
+  
+  **Default interval:** `600` seconds
+  
+  The goal of this option is to provide a long-term association between clients (denoted by their common name) and the virtual IP address assigned to them from the ifconfig-pool. Maintaining a long-term association is good for clients because it allows them to effectively use the `--persist-tun` option.
+  
+  `file` is a comma-delimited ASCII file, formatted as `<Common-Name>,<IP-address>`.
+  
+  If `seconds` = `0`, `file` will be treated as read-only. This is useful if you would like to treat `file` as a configuration file.
+  
+  ```bash
+  # Update every 600 seconds (default)
+  openvpn --ifconfig-pool-persist /var/log/openvpn/ipp.txt
+  
+  # Update every 60 seconds
+  openvpn --ifconfig-pool-persist /var/log/openvpn/ipp.txt 60
+  
+  # Read-only mode
+  openvpn --ifconfig-pool-persist /etc/openvpn/ipp.txt 0
+  ```
+  
+  <Note>
+  The entries in this file are treated by OpenVPN as suggestions only, based on past associations between a common name and IP address. They do not guarantee that the given common name will always receive the given IP address. If you want guaranteed assignment, use `--ifconfig-push`.
+  </Note>
+</ParamField>
+
+<ParamField path="--ifconfig-push" type="string">
+  Push virtual IP endpoints for client tunnel, overriding the `--ifconfig-pool` dynamic allocation.
+  
+  The parameters `local` and `remote-netmask` are set according to the `--ifconfig` directive which you want to execute on the client machine to configure the remote end of the tunnel. Note that the parameters `local` and `remote-netmask` are from the perspective of the client, not the server. They may be DNS names rather than IP addresses, in which case they will be resolved on the server at the time of client connection.
+  
+  The optional `alias` parameter may be used in cases where NAT causes the client view of its local endpoint to differ from the server view.
+  
+  ```bash
+  # Basic static IP assignment
+  ifconfig-push 10.8.0.100 255.255.255.0
+  
+  # With alias for NAT
+  ifconfig-push 10.8.0.100 255.255.255.0 10.9.0.100
+  ```
+  
+  <Note>
+  This option must be associated with a specific client instance, which means that it must be specified either in a client instance config file using `--client-config-dir` or dynamically generated using a `--client-connect` script.
+  </Note>
+  
+  <Accordion title="Client IP address selection algorithm">
+  
+  OpenVPN's internal client IP address selection works in this order:
+  
+  1. Use `--client-connect` script generated file for static IP (first choice)
+  2. Use `--client-config-dir` file for static IP (next choice)
+  3. Use `--ifconfig-pool` allocation for dynamic IP (last choice)
+  
+  </Accordion>
+</ParamField>
+
+<ParamField path="--ifconfig-ipv6-push" type="string">
+  For `--client-config-dir` per-client static IPv6 interface configuration, see `--client-config-dir` and `--ifconfig-push` for more details.
+  
+  When DCO is enabled and the IP is not contained in the network specified by `--ifconfig-ipv6`, OpenVPN will install a /128 host route for the `ipv6addr` IP address.
+  
+  ```bash
+  ifconfig-ipv6-push fd00:abcd:1234::1000/64 fd00:abcd:1234::1
+  ```
+</ParamField>
+
+## Client configuration
+
+<ParamField path="--client-config-dir" type="string">
+  Specify a directory `dir` for custom client config files. After a connecting client has been authenticated, OpenVPN will look in this directory for a file having the same name as the client's X509 common name. If a matching file exists, it will be opened and parsed for client-specific configuration options. If no matching file is found, OpenVPN will instead try to open and parse a default file called "DEFAULT", which may be provided but is not required.
+  
+  This file can specify a fixed IP address for a given client using `--ifconfig-push`, as well as fixed subnets owned by the client using `--iroute`.
+  
+  ```bash
+  openvpn --client-config-dir /etc/openvpn/ccd
+  ```
+  
+  <Note>
+  The configuration files must be readable by the OpenVPN process after it has dropped its root privileges.
+  </Note>
+  
+  <Accordion title="Legal options in client-specific context">
+  
+  The following options are legal in a client-specific context:
+  - `--push`
+  - `--push-reset`
+  - `--push-remove`
+  - `--iroute`
+  - `--ifconfig-push`
+  - `--vlan-pvid`
+  - `--config`
+  
+  </Accordion>
+  
+  <Note>
+  OpenVPN uses the CN exactly as written in the certificate. But since this is a file access the filesystem might interfere. Importantly OpenVPN will consider two CNs that only differ in case as different names but a case-insensitive filesystem (like you might encounter on Windows or macOS) will treat them as the same.
+  </Note>
+</ParamField>
+
+<ParamField path="--ccd-exclusive" type="flag">
+  Require, as a condition of authentication, that a connecting client has a `--client-config-dir` file.
+  
+  ```bash
+  openvpn --ccd-exclusive --client-config-dir /etc/openvpn/ccd
+  ```
+</ParamField>
+
+## Routing
+
+<ParamField path="--iroute" type="string">
+  Generate an internal route to a specific client. The `netmask` parameter, if omitted, defaults to `255.255.255.255`.
+  
+  This directive can be used to route a fixed subnet from the server to a particular client, regardless of where the client is connecting from. Remember that you must also add the route to the system routing table as well (such as by using the `--route` directive). The reason why two routes are needed is that the `--route` directive routes the packet from the kernel to OpenVPN. Once in OpenVPN, the `--iroute` directive routes to the specific client.
+  
+  However, when using DCO, the `--iroute` directive is usually enough for DCO to fully configure the routing table. The extra `--route` directive is required only if the expected behaviour is to route the traffic for a specific network to the VPN interface also when the responsible client is not connected (traffic will then be dropped).
+  
+  ```bash
+  # Route entire subnet to client
+  iroute 192.168.100.0 255.255.255.0
+  
+  # Route single IP to client
+  iroute 192.168.100.10
+  ```
+  
+  <Note>
+  This option must be specified either in a client instance config file using `--client-config-dir` or dynamically generated using a `--client-connect` script.
+  </Note>
+  
+  <Accordion title="Interaction with --push route">
+  
+  The `--iroute` directive also has an important interaction with `--push "route ..."`. `--iroute` essentially defines a subnet which is owned by a particular client (we will call this client A). If you would like other clients to be able to reach A's subnet, you can use `--push "route ..."` together with `--client-to-client` to effect this.
+  
+  In order for all clients to see A's subnet, OpenVPN must push this route to all clients EXCEPT for A, since the subnet is already owned by A. OpenVPN accomplishes this by not pushing a route to a client if it matches one of the client's iroutes.
+  
+  </Accordion>
+</ParamField>
+
+<ParamField path="--iroute-ipv6" type="string">
+  For `--client-config-dir` per-client static IPv6 route configuration, see `--iroute` for more details how to setup and use this, and how `--iroute` and `--route` interact.
+  
+  ```bash
+  iroute-ipv6 fd00:abcd:1234:1000::/64
+  ```
+</ParamField>
+
+## Pushing options to clients
+
+<ParamField path="--push" type="string">
+  Push a config file option back to the client for remote execution. Note that `option` must be enclosed in double quotes (`""`).
+  
+  The client must specify `--pull` in its config file. The set of options which can be pushed is limited by both feasibility and security. Some options such as those which would execute scripts are banned, since they would effectively allow a compromised server to execute arbitrary code on the client.
+  
+  ```bash
+  # Push routes to client
+  openvpn --push "route 192.168.10.0 255.255.255.0"
+  
+  # Push DNS settings
+  openvpn --push "dhcp-option DNS 8.8.8.8"
+  
+  # Push redirect gateway
+  openvpn --push "redirect-gateway def1"
+  ```
+  
+  <Accordion title="Partial list of pushable options">
+  
+  - `--route`, `--route-gateway`, `--route-delay`
+  - `--redirect-gateway`
+  - `--ip-win32`
+  - `--dhcp-option`, `--dns`
+  - `--inactive`, `--ping`, `--ping-exit`, `--ping-restart`
+  - `--setenv`
+  - `--auth-token`
+  - `--persist-tun`
+  - `--echo`
+  - `--comp-lzo`
+  - `--socket-flags`, `--sndbuf`, `--rcvbuf`
+  - `--session-timeout`
+  
+  </Accordion>
+  
+  <Note>
+  Using `--push` requires OpenVPN to run in `--mode server` (or using one of `--server`, `--server-bridge` helper directives).
+  </Note>
+</ParamField>
+
+<ParamField path="--push-remove" type="string">
+  Selectively remove all `--push` options matching "opt" from the option list for a client. `opt` is matched as a substring against the whole option string to-be-pushed to the client.
+  
+  `--push-remove` can only be used in a client-specific context, like in a `--client-config-dir` file, or `--client-connect` script or plugin -- similar to `--push-reset`, just more selective.
+  
+  ```bash
+  # Remove all route options
+  push-remove route
+  
+  # Remove specific IPv6 routes
+  push-remove "route-ipv6 2001:"
+  ```
+  
+  <Note>
+  To change an option, `--push-remove` can be used to first remove the old value, and then add a new `--push` option with the new value.
+  </Note>
+  
+  <Note>
+  Due to implementation details, 'ifconfig' and 'ifconfig-ipv6' can only be removed with an exact match on the option (`push-remove ifconfig`), no substring matching and no matching on the IPv4/IPv6 address argument is possible.
+  </Note>
+</ParamField>
+
+<ParamField path="--push-reset" type="flag">
+  Don't inherit the global push list for a specific client instance. Specify this option in a client-specific context such as with a `--client-config-dir` configuration file. This option will ignore `--push` options at the global config file level.
+  
+  ```bash
+  push-reset
+  ```
+  
+  <Note>
+  `--push-reset` is very thorough: it will remove almost all options from the list of to-be-pushed options. In many cases, some of these options will need to be re-configured afterwards - specifically, `--topology subnet` and `--route-gateway` will get lost and this will break client configs in many cases. Thus, for most purposes, `--push-remove` is better suited to selectively remove push options for individual clients.
+  </Note>
+</ParamField>
+
+## Client management
+
+<ParamField path="--client-to-client" type="flag">
+  Because the OpenVPN server mode handles multiple clients through a single tun or tap interface, it is effectively a router. The `--client-to-client` flag tells OpenVPN to internally route client-to-client traffic rather than pushing all client-originating traffic to the TUN/TAP interface.
+  
+  When this option is used, each client will "see" the other clients which are currently connected. Otherwise, each client will only see the server.
+  
+  ```bash
+  openvpn --client-to-client
+  ```
+  
+  <Note>
+  Don't use this option if you want to firewall tunnel traffic using custom, per-client rules.
+  </Note>
+  
+  <Note>
+  When using data channel offload this option has no effect. Packets are always sent to the tunnel interface and then routed based on the system routing table.
+  </Note>
+</ParamField>
+
+<ParamField path="--duplicate-cn" type="flag">
+  Allow multiple clients with the same common name to concurrently connect. In the absence of this option, OpenVPN will disconnect a client instance upon connection of a new client having the same common name.
+  
+  ```bash
+  openvpn --duplicate-cn
+  ```
+</ParamField>
+
+<ParamField path="--max-clients" type="integer">
+  Limit server to a maximum of `n` concurrent clients.
+  
+  ```bash
+  openvpn --max-clients 100
+  ```
+</ParamField>
+
+<ParamField path="--max-routes-per-client" type="integer">
+  Allow a maximum of `n` internal routes per client.
+  
+  **Default:** `256`
+  
+  This is designed to help contain DoS attacks where an authenticated client floods the server with packets appearing to come from many unique MAC addresses, forcing the server to deplete virtual memory as its internal routing table expands.
+  
+  ```bash
+  openvpn --max-routes-per-client 512
+  ```
+  
+  <Note>
+  This directive affects OpenVPN's internal routing table, not the kernel routing table.
+  </Note>
+</ParamField>
+
+<ParamField path="--stale-routes-check" type="integer">
+  Remove routes which haven't had activity for `n` seconds (i.e. the ageing time). This check is run every `t` seconds (i.e. check interval).
+  
+  If `t` is not present it defaults to `n`.
+  
+  This option helps to keep the dynamic routing table small. See also `--max-routes-per-client`.
+  
+  ```bash
+  # Check every 120 seconds, remove routes inactive for 120 seconds
+  openvpn --stale-routes-check 120
+  
+  # Check every 60 seconds, remove routes inactive for 300 seconds
+  openvpn --stale-routes-check 300 60
+  ```
+</ParamField>
+
+<ParamField path="--disable" type="flag">
+  Disable a particular client (based on the common name) from connecting. Don't use this option to disable a client due to key or password compromise. Use a CRL (certificate revocation list) instead (see the `--crl-verify` option).
+  
+  <Note>
+  This option must be associated with a specific client instance, which means that it must be specified either in a client instance config file using `--client-config-dir` or dynamically generated using a `--client-connect` script.
+  </Note>
+  
+  ```bash
+  disable
+  ```
+</ParamField>
+
+## DoS protection
+
+<ParamField path="--connect-freq" type="integer">
+  Allow a maximum of `n` new connections per `sec` seconds from clients.
+  
+  This is designed to contain DoS attacks which flood the server with connection requests using certificates which will ultimately fail to authenticate.
+  
+  This limit applies after `--connect-freq-initial` and only applies to client that have completed the three-way handshake or client that use `--tls-crypt-v2` without cookie support (`allow-noncookie` argument to `--tls-crypt-v2`).
+  
+  ```bash
+  # Allow maximum 10 connections per 60 seconds
+  openvpn --connect-freq 10 60
+  ```
+  
+  <Note>
+  This is an imperfect solution however, because in a real DoS scenario, legitimate connections might also be refused.
+  </Note>
+  
+  <Note>
+  For the best protection against DoS attacks in server mode, use `--proto udp` and either `--tls-auth` or `--tls-crypt`.
+  </Note>
+</ParamField>
+
+<ParamField path="--connect-freq-initial" type="integer">
+  (UDP only) Allow a maximum of `n` initial connection packet responses per `sec` seconds from the OpenVPN server to clients.
+  
+  **Default:** `100` initial connections per `10` seconds
+  
+  OpenVPN starting at 2.6 is very efficient in responding to initial connection packets. When not limiting the initial responses an OpenVPN daemon can be abused in reflection attacks. This option is designed to limit the rate OpenVPN will respond to initial attacks.
+  
+  Connection attempts that complete the initial three-way handshake will not be counted against the limit.
+  
+  ```bash
+  # Allow 50 initial connections per 10 seconds
+  openvpn --connect-freq-initial 50 10
+  ```
+</ParamField>
+
+## Authentication tokens
+
+<ParamField path="--auth-gen-token" type="string" optional>
+  Returns an authentication token to successfully authenticated clients.
+  
+  After successful user/password authentication, the OpenVPN server will with this option generate a temporary authentication token and push that to the client. On the following renegotiations, the OpenVPN client will pass this token instead of the users password.
+  
+  The `lifetime` argument defines how long the generated token is valid (in seconds). If lifetime is not set or it is set to `0`, the token will never expire.
+  
+  If `renewal-time` is not set it defaults to `reneg-sec`.
+  
+  ```bash
+  # Token valid for 1 hour
+  openvpn --auth-gen-token 3600
+  
+  # Token with custom renewal time
+  openvpn --auth-gen-token 86400 3600
+  
+  # With external auth
+  openvpn --auth-gen-token 3600 external-auth
+  ```
+  
+  <Accordion title="Token expiration behavior">
+  
+  The token will expire either after:
+  - The configured `lifetime` of the token is reached, or
+  - After not being renewed for more than 2 * `renewal-time` seconds
+  
+  Clients will be sent renewed tokens on every TLS renegotiation. If `renewal-time` is lower than `reneg-sec` the server will push an updated temporary authentication token every `renewal-time` seconds.
+  
+  </Accordion>
+  
+  <Note>
+  This feature is useful for environments which are configured to use One Time Passwords (OTP) as part of the user/password authentications and that authentication mechanism does not implement any auth-token support.
+  </Note>
+</ParamField>
+
+<ParamField path="--auth-gen-token-secret" type="string">
+  Specifies a file that holds a secret for the HMAC used in `--auth-gen-token`. If `file` is not present OpenVPN will generate a random secret on startup.
+  
+  This file should be used if auth-token should validate after restarting a server or if client should be able to roam between multiple OpenVPN servers with their auth-token.
+  
+  ```bash
+  openvpn --auth-gen-token-secret /etc/openvpn/auth-token-secret
+  ```
+</ParamField>
+
+## Advanced options
+
+<ParamField path="--auth-user-pass-optional" type="flag">
+  Allow connections by clients that do not specify a username/password.
+  
+  Normally, when `--auth-user-pass-verify` or `--management-client-auth` are specified (or an authentication plugin module), the OpenVPN server daemon will require connecting clients to specify a username and password. This option makes the submission of a username/password by clients optional, passing the responsibility to the user-defined authentication module/script to accept or deny the client based on other factors (such as the setting of X509 certificate fields).
+  
+  ```bash
+  openvpn --auth-user-pass-optional
+  ```
+</ParamField>
+
+<ParamField path="--multihome" type="flag" optional>
+  Configure a multi-homed UDP server. This option needs to be used when a server has more than one IP address (e.g. multiple interfaces, or secondary IP addresses), and is not using `--local` to force binding to one specific address only.
+  
+  If the `same-interface` flag is added, OpenVPN will copy the incoming interface index to the outgoing interface index, trying to send the packet out over the same interface where it came in on.
+  
+  ```bash
+  # Basic multi-home
+  openvpn --multihome
+  
+  # With same-interface flag
+  openvpn --multihome same-interface
+  ```
+  
+  <Note>
+  This option is only relevant for UDP servers. Starting with 2.7.0, OpenVPN will ignore the incoming interface of the packet, and leave selection of the outgoing interface to the normal routing/policy mechanisms of the OS.
+  </Note>
+</ParamField>
+
+<ParamField path="--override-username" type="string">
+  Sets the username of a connection to the specified username. This username will also be used by `--auth-gen-token`. However, the overridden username comes only into effect after the `--client-config-dir` has been read and the `--auth-user-pass-verify` and `--client-connect` scripts have been run.
+  
+  The changed username will be picked up by the status output and also by the `--auth-gen-token` option. It will also be pushed to the client using `--auth-token-user` if `--auth-gen-token` is enabled.
+  
+  ```bash
+  override-username alice@example.com
+  ```
+  
+  <Note>
+  It is recommended to avoid the use of the `--override-username` option if the option `--username-as-common-name` is being used.
+  </Note>
+  
+  <Note>
+  This option is mainly intended for use cases that use certificates and multi factor authentication and therefore do not provide a username that can be used for `--auth-gen-token`.
+  </Note>
+</ParamField>
+
+<ParamField path="--port-share" type="string">
+  Share OpenVPN TCP with another service.
+  
+  When run in TCP server mode, share the OpenVPN port with another application, such as an HTTPS server. If OpenVPN senses a connection to its port which is using a non-OpenVPN protocol, it will proxy the connection to the server at `host`:`port`. Currently only designed to work with HTTP/HTTPS, though it would be theoretically possible to extend to other protocols such as ssh.
+  
+  `dir` specifies an optional directory where a temporary file will be dynamically generated for each proxy connection to help determine the origin of the connection.
+  
+  ```bash
+  # Basic port sharing with HTTPS
+  openvpn --port-share 127.0.0.1 443
+  
+  # With directory for connection tracking
+  openvpn --port-share 127.0.0.1 443 /var/run/openvpn/port-share
+  ```
+  
+  <Note>
+  Not implemented on Windows.
+  </Note>
+</ParamField>
+
+<ParamField path="--username-as-common-name" type="flag">
+  Use the authenticated username as the common-name, rather than the common-name from the client certificate. Requires that some form of `--auth-user-pass` verification is in effect.
+  
+  As the replacement happens after `--auth-user-pass` verification, the verification script or plugin will still receive the common-name from the certificate.
+  
+  The common_name environment variable passed to scripts and plugins invoked after authentication (e.g, client-connect script) and file names parsed in client-config directory will match the username.
+  
+  ```bash
+  openvpn --username-as-common-name
+  ```
+</ParamField>
+
+<ParamField path="--verify-client-cert" type="string">
+  Specify whether the client is required to supply a valid certificate.
+  
+  **Default:** `require`
+  
+  Possible mode options:
+  
+  - **none** - A client certificate is not required. The client needs to authenticate using username/password only. Be aware that using this directive is less secure than requiring certificates from all clients. `--verify-client-cert none` is functionally equivalent to `--client-cert-not-required`.
+  - **optional** - A client may present a certificate but it is not required to do so. When using this directive, you should also use a `--auth-user-pass-verify` script to ensure that clients are authenticated using a certificate, a username and password, or possibly even both.
+  - **require** - This is the default option. A client is required to present a certificate, otherwise VPN access is refused.
+  
+  ```bash
+  # Don't require client certificate
+  openvpn --verify-client-cert none
+  
+  # Optional client certificate
+  openvpn --verify-client-cert optional
+  ```
+  
+  <Note>
+  If you don't use this directive (or use `--verify-client-cert require`) but you also specify an `--auth-user-pass-verify` script, then OpenVPN will perform double authentication. The client certificate verification AND the `--auth-user-pass-verify` script will need to succeed in order for a client to be authenticated and accepted onto the VPN.
+  </Note>
+</ParamField>
+
+## VLAN tagging
+
+<ParamField path="--vlan-tagging" type="flag">
+  Server-only option. Turns the OpenVPN server instance into a switch that understands VLAN-tagging, based on IEEE 802.1Q.
+  
+  The server TAP device and each of the connecting clients is seen as a port of the switch. All client ports are in untagged mode and the server TAP device is VLAN-tagged, untagged or accepts both, depending on the `--vlan-accept` setting.
+  
+  Using the `--vlan-pvid v` option once per client (see --client-config-dir), each port can be associated with a certain VID. Packets can only be forwarded between ports having the same VID. Therefore, clients with differing VIDs are completely separated from one-another, even if `--client-to-client` is activated.
+  
+  ```bash
+  openvpn --vlan-tagging
+  ```
+  
+  <Note>
+  This option can only be activated in `--dev tap mode`.
+  </Note>
+</ParamField>
+
+<ParamField path="--vlan-accept" type="string">
+  Configure the VLAN tagging policy for the server TAP device.
+  
+  **Default:** `all`
+  
+  The following modes are available:
+  
+  - **tagged** - Admit only VLAN-tagged frames. Only VLAN-tagged packets are accepted, while untagged or priority-tagged packets are dropped when entering the server TAP device.
+  - **untagged** - Admit only untagged and prio-tagged frames. VLAN-tagged packets are not accepted, while untagged or priority-tagged packets entering the server TAP device are tagged with the value configured for the global `--vlan-pvid` setting.
+  - **all** (default) - Admit all frames. All packets are admitted and then treated like untagged or tagged mode respectively.
+  
+  ```bash
+  openvpn --vlan-accept tagged
+  ```
+  
+  <Note>
+  Some vendors refer to switch ports running in `tagged` mode as "trunk ports" and switch ports running in `untagged` mode as "access ports".
+  </Note>
+</ParamField>
+
+<ParamField path="--vlan-pvid" type="integer">
+  Specifies which VLAN identifier a "port" is associated with. Only valid when `--vlan-tagging` is specified.
+  
+  In the client context, the setting specifies which VLAN ID a client is associated with. In the global context, the VLAN ID of the server TAP device is set. The latter only makes sense for `--vlan-accept untagged` and `--vlan-accept all` modes.
+  
+  **Valid values:** `1` through `4094`
+  
+  **Default (global):** `1`
+  
+  If no `--vlan-pvid` is specified in the client context, the global value is inherited.
+  
+  ```bash
+  # Set global PVID
+  openvpn --vlan-pvid 100
+  
+  # In client config file
+  vlan-pvid 200
+  ```
+  
+  <Note>
+  In some switch implementations, the PVID is also referred to as "Native VLAN".
+  </Note>
+</ParamField>

@@ -1,0 +1,206 @@
+---
+title: Basic point-to-point VPN setup
+description: Learn how to set up a simple point-to-point VPN connection between two machines using OpenVPN with different security levels.
+---
+
+This guide demonstrates basic point-to-point VPN configurations between two machines. We'll cover setups ranging from simple unencrypted tunnels to fully secured TLS connections.
+
+## Prerequisites
+
+Before starting, ensure:
+
+- OpenVPN is installed on both machines
+- Network connectivity exists between the machines
+- Firewall allows traffic on port 1194/UDP (or your chosen port)
+
+## Network setup
+
+For these examples, we'll use:
+
+- **bob.example.com**: First peer with tunnel endpoint 10.4.0.1
+- **alice.example.com**: Second peer with tunnel endpoint 10.4.0.2
+
+<Note>
+Tunnel endpoints are private IP addresses that only have meaning within the VPN context. Choose addresses from private ranges (10.x.x.x or 192.168.x.x) that don't conflict with your existing networks.
+</Note>
+
+## Firewall configuration
+
+If firewalls exist between machines, configure them to forward OpenVPN traffic:
+
+- **Default port**: 1194/UDP
+- **Direction**: Bidirectional
+
+For stateful firewalls without direct control, add `--ping 15` to commands to maintain the connection:
+
+```bash
+openvpn --remote alice.example.com --dev tun1 --ifconfig 10.4.0.1 10.4.0.2 --ping 15
+```
+
+## Simple tunnel without security
+
+<Warning>
+This configuration provides no encryption and should only be used for testing purposes.
+</Warning>
+
+<Steps>
+  <Step title="Start the tunnel on bob">
+    ```bash
+    openvpn --remote alice.example.com --dev tun1 \
+            --ifconfig 10.4.0.1 10.4.0.2 --verb 9
+    ```
+    
+    The `--verb 9` option produces verbose output similar to tcpdump for debugging.
+  </Step>
+
+  <Step title="Start the tunnel on alice">
+    ```bash
+    openvpn --remote bob.example.com --dev tun1 \
+            --ifconfig 10.4.0.2 10.4.0.1 --verb 9
+    ```
+  </Step>
+
+  <Step title="Verify the connection">
+    On bob:
+    ```bash
+    ping 10.4.0.2
+    ```
+    
+    On alice:
+    ```bash
+    ping 10.4.0.1
+    ```
+  </Step>
+</Steps>
+
+## Secure tunnel with self-signed certificates
+
+This approach uses self-signed certificates with fingerprint verification for authentication.
+
+<Steps>
+  <Step title="Generate certificate on bob">
+    ```bash
+    openssl req -x509 -newkey ec:<(openssl ecparam -name secp384r1) \
+            -keyout bob.pem -out bob.pem -nodes -sha256 -days 3650 \
+            -subj '/CN=bob'
+    
+    openssl x509 -noout -sha256 -fingerprint -in bob.pem
+    ```
+    
+    Save the fingerprint output - you'll need it for alice's configuration.
+  </Step>
+
+  <Step title="Generate certificate on alice">
+    ```bash
+    openssl req -x509 -newkey ec:<(openssl ecparam -name secp384r1) \
+            -keyout alice.pem -out alice.pem -nodes -sha256 -days 3650 \
+            -subj '/CN=alice'
+    
+    openssl x509 -noout -sha256 -fingerprint -in alice.pem
+    ```
+    
+    Save the fingerprint output - you'll need it for bob's configuration.
+  </Step>
+
+  <Step title="Exchange fingerprints securely">
+    Transfer the certificate fingerprints between machines using a secure method like `scp` or `ssh`.
+  </Step>
+
+  <Step title="Start VPN on bob (TLS server)">
+    ```bash
+    openvpn --ifconfig 10.4.0.1 10.4.0.2 --tls-server --dev tun --dh none \
+            --cert bob.pem --key bob.pem --cipher AES-256-GCM \
+            --peer-fingerprint "$fingerprint_of_alices_cert"
+    ```
+    
+    <Note>
+    Using elliptic curve (secp384r1) allows `--dh` to be set to `none`.
+    </Note>
+  </Step>
+
+  <Step title="Start VPN on alice (TLS client)">
+    ```bash
+    openvpn --remote bob.example.com --tls-client --dev tun1 \
+            --ifconfig 10.4.0.2 10.4.0.1 --cipher AES-256-GCM \
+            --cert alice.pem --key alice.pem \
+            --peer-fingerprint "$fingerprint_of_bobs_cert"
+    ```
+  </Step>
+
+  <Step title="Test the secure tunnel">
+    On bob:
+    ```bash
+    ping 10.4.0.2
+    ```
+    
+    On alice:
+    ```bash
+    ping 10.4.0.1
+    ```
+  </Step>
+</Steps>
+
+## Full PKI with certificate authority
+
+For production environments, use a complete PKI infrastructure with a certificate authority.
+
+<Warning>
+The test certificates included in the OpenVPN distribution (ca.crt, client.crt, server.crt, etc.) are completely insecure and should only be used for testing.
+</Warning>
+
+<Steps>
+  <Step title="Prepare certificates">
+    Generate separate certificate/key pairs for both bob and alice, signed by a certificate authority. You'll need:
+    
+    - `ca.crt` - Certificate authority certificate
+    - `client.crt` and `client.key` - Client certificate and key
+    - `server.crt` and `server.key` - Server certificate and key
+    - `dh2048.pem` - Diffie-Hellman parameters
+    
+    See the [PKI setup guide](/setup/pki) for detailed instructions.
+  </Step>
+
+  <Step title="Start VPN on bob (TLS client)">
+    ```bash
+    openvpn --remote alice.example.com --dev tun1 \
+            --ifconfig 10.4.0.1 10.4.0.2 \
+            --tls-client --ca ca.crt \
+            --cert client.crt --key client.key \
+            --reneg-sec 60 --verb 5
+    ```
+  </Step>
+
+  <Step title="Start VPN on alice (TLS server)">
+    ```bash
+    openvpn --remote bob.example.com --dev tun1 \
+            --ifconfig 10.4.0.2 10.4.0.1 \
+            --tls-server --dh dh1024.pem --ca ca.crt \
+            --cert server.crt --key server.key \
+            --reneg-sec 60 --verb 5
+    ```
+  </Step>
+
+  <Step title="Verify the connection">
+    On bob:
+    ```bash
+    ping 10.4.0.2
+    ```
+    
+    On alice:
+    ```bash
+    ping 10.4.0.1
+    ```
+    
+    With `--verb 5`, you'll see status information on each key renegotiation (every 60 seconds in this example).
+  </Step>
+</Steps>
+
+<Note>
+The `--reneg-sec 60` option is set for demonstration purposes. For production use, omit this option to use OpenVPN's default one-hour renegotiation interval.
+</Note>
+
+## Next steps
+
+- [Site-to-site VPN](/examples/site-to-site) - Connect entire networks
+- [Multi-client setup](/examples/multi-client) - Support multiple simultaneous clients
+- [Advanced configurations](/examples/advanced-configs) - Explore advanced options

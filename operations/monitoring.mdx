@@ -1,0 +1,562 @@
+---
+title: Monitoring OpenVPN connections
+description: Monitor OpenVPN server status, client connections, and bandwidth usage through logs, status files, and the management interface
+---
+
+This guide covers monitoring techniques for OpenVPN including logging, status reporting, and the management interface.
+
+## Logging configuration
+
+### Verbosity levels
+
+Control log output detail with the `--verb` option:
+
+```bash
+verb 3  # Recommended for production
+```
+
+<Accordion title="Verbosity level reference">
+  - **0** - No output except fatal errors
+  - **1-4** - Normal usage range (3 recommended for good summary)
+  - **5** - Shows R/W characters for each packet (uppercase for TCP/UDP, lowercase for TUN/TAP)
+  - **6-11** - Debug info range (see errlevel.h for details)
+
+  <Tip>
+    Level 3 provides a good balance of information without excessive output. Use level 4-5 for troubleshooting.
+  </Tip>
+</Accordion>
+
+### Log output options
+
+<Accordion title="Log to file">
+  Write logs to a file instead of stdout:
+
+  ```bash
+  # Truncate file on startup
+  log /var/log/openvpn/server.log
+
+  # Append to existing file
+  log-append /var/log/openvpn/server.log
+  ```
+
+  <Note>
+    The `--log` option takes effect immediately and persists across SIGHUP, SIGUSR1, and `--ping-restart` events.
+  </Note>
+</Accordion>
+
+<Accordion title="Log to syslog">
+  Direct output to system logger:
+
+  ```bash
+  syslog openvpn-server
+  daemon
+  ```
+
+  On Windows, OpenVPN logs by default when started as a service without needing this option.
+</Accordion>
+
+<Accordion title="Machine-readable format">
+  Enable structured logging for automated processing:
+
+  ```bash
+  machine-readable-output
+  ```
+
+  This ensures timestamps and message flags are always included.
+</Accordion>
+
+### Log management
+
+```bash
+# Limit repeated messages
+mute 20
+
+# Suppress common false alarms
+mute-replay-warnings
+
+# Timestamp control
+suppress-timestamps  # Disable timestamps
+
+# Error output
+errors-to-stderr  # Send errors to stderr
+```
+
+<Warning>
+  The `mute-replay-warnings` option silences replay warnings which are common on WiFi networks. This preserves security while reducing log verbosity.
+</Warning>
+
+## Status files
+
+### Basic status reporting
+
+Generate status files with connection and routing information:
+
+```bash
+# Update every 60 seconds (default)
+status /var/log/openvpn/status.log
+
+# Update every 30 seconds
+status /var/log/openvpn/status.log 30
+
+# Set output format version
+status-version 3
+```
+
+### Status file formats
+
+<Accordion title="Version 1 - Traditional format (default)">
+  Client list contains comma-separated fields:
+  - Common Name
+  - Real Address
+  - Bytes Received
+  - Bytes Sent
+  - Connected Since
+
+  ```bash
+  status-version 1
+  ```
+</Accordion>
+
+<Accordion title="Version 2 - Extended format">
+  More reliable format with additional fields:
+  - Common Name
+  - Real Address
+  - Virtual Address
+  - Virtual IPv6 Address
+  - Username
+  - Client ID
+  - Peer ID
+  - Data Channel Cipher
+  - Bytes Received
+  - Bytes Sent
+  - Connected Since
+
+  ```bash
+  status-version 2
+  ```
+</Accordion>
+
+<Accordion title="Version 3 - Tab-separated format">
+  Identical to version 2 but with tab separators for easier parsing:
+
+  ```bash
+  status-version 3
+  ```
+
+  <Tip>
+    Version 3 is recommended for external processing and monitoring tools.
+  </Tip>
+</Accordion>
+
+### Trigger status output
+
+Generate status on demand:
+
+```bash
+# Send SIGUSR2 to write status to syslog
+kill -USR2 $(pgrep openvpn)
+
+# Via systemd
+systemctl kill -s SIGUSR2 openvpn-server@server
+```
+
+## Management interface
+
+### Enabling the management interface
+
+The management interface provides real-time control and monitoring:
+
+```bash
+# Unix socket (recommended)
+management /var/run/openvpn/management.sock unix
+management /var/run/openvpn/management.sock unix /etc/openvpn/mgmt-password
+
+# TCP socket on localhost
+management 127.0.0.1 7505
+management 127.0.0.1 7505 /etc/openvpn/mgmt-password
+```
+
+<Warning>
+  **Security critical**: Always use password protection when enabling TCP management interface:
+  - Set IP to 127.0.0.1 (localhost only)
+  - Use `pw-file` parameter for authentication
+  - Never expose management interface to untrusted networks
+
+  ```bash
+  # Create password file
+  echo "your-secure-password" > /etc/openvpn/mgmt-password
+  chmod 600 /etc/openvpn/mgmt-password
+  ```
+</Warning>
+
+### Restricting access
+
+For Unix sockets, restrict by user and group:
+
+```bash
+management /var/run/openvpn/mgmt.sock unix
+management-client-user openvpn
+management-client-group openvpn
+```
+
+### Connecting to management interface
+
+Connect using telnet or netcat in raw mode:
+
+```bash
+# Unix socket
+socat - UNIX-CONNECT:/var/run/openvpn/management.sock
+
+# TCP socket
+telnet 127.0.0.1 7505
+```
+
+Once connected, type `help` for available commands.
+
+## Management interface commands
+
+### Status monitoring commands
+
+<Accordion title="status - View connection status">
+  Display current daemon status:
+
+  ```bash
+  # Default format
+  status
+
+  # Specific version
+  status 3
+  ```
+
+  Output format matches `--status` directive and includes:
+  - Connected clients (server mode)
+  - Routing table
+  - Traffic statistics
+</Accordion>
+
+<Accordion title="state - Connection state">
+  Show current OpenVPN state:
+
+  ```bash
+  # Current state
+  state
+
+  # Enable real-time notifications
+  state on
+
+  # Show history
+  state all
+
+  # Show last 3 state transitions
+  state 3
+
+  # Atomic: show history and enable notifications
+  state on all
+  ```
+
+  **OpenVPN states**:
+  - `CONNECTING` - Initial state
+  - `WAIT` - Waiting for server response (client)
+  - `AUTH` - Authenticating with server (client)
+  - `GET_CONFIG` - Downloading configuration (client)
+  - `ASSIGN_IP` - Assigning IP to interface
+  - `ADD_ROUTES` - Adding routes
+  - `CONNECTED` - Initialization complete
+  - `RECONNECTING` - Restart occurred
+  - `EXITING` - Graceful exit in progress
+  - `RESOLVE` - DNS lookup (client)
+  - `TCP_CONNECT` - Connecting to TCP server (client)
+  - `AUTH_PENDING` - Authentication pending (client)
+
+  Real-time notifications use `>STATE:` prefix with up to 9 comma-separated parameters including timestamp, state name, descriptive string, and network addresses.
+</Accordion>
+
+<Accordion title="log - View log messages">
+  Access log file cache:
+
+  ```bash
+  # Enable real-time log output
+  log on
+
+  # Show cached history
+  log all
+
+  # Show last 20 lines
+  log 20
+
+  # Atomic: show history and enable real-time
+  log on all
+
+  # Disable real-time output
+  log off
+  ```
+
+  Configure log cache size:
+  ```bash
+  management-log-cache 500
+  ```
+
+  Real-time format: `>LOG:timestamp,flags,message`
+  
+  Flags: I (info), F (fatal), N (non-fatal error), W (warning), D (debug)
+</Accordion>
+
+<Accordion title="bytecount - Bandwidth monitoring">
+  Monitor real-time bandwidth usage:
+
+  ```bash
+  # Enable notifications every 5 seconds
+  bytecount 5
+
+  # Disable notifications
+  bytecount 0
+  ```
+
+  **Client output**:
+  ```
+  >BYTECOUNT:{BYTES_IN},{BYTES_OUT}
+  ```
+
+  **Server output** (per connected client):
+  ```
+  >BYTECOUNT_CLI:{CID},{BYTES_IN},{BYTES_OUT}
+  ```
+
+  <Note>
+    When clients disconnect, final bandwidth numbers are included in `bytes_received` and `bytes_sent` environmental variables in the `>CLIENT:DISCONNECT` notification.
+  </Note>
+</Accordion>
+
+### Client management commands
+
+<Accordion title="kill - Disconnect client">
+  In server mode, disconnect specific clients:
+
+  ```bash
+  # Kill by common name
+  kill Test-Client
+
+  # Kill by address and port
+  kill tcp:1.2.3.4:4000
+  ```
+
+  <Warning>
+    Killing by IPv6 address is not yet supported. Use common name or CID instead.
+  </Warning>
+</Accordion>
+
+<Accordion title="client-kill - Kill by client ID">
+  Immediately terminate a client session:
+
+  ```bash
+  client-kill {CID}
+  ```
+
+  Use `status` command to find client IDs (CID).
+</Accordion>
+
+### Control commands
+
+<Accordion title="signal - Send signals">
+  Send control signals to OpenVPN daemon:
+
+  ```bash
+  signal SIGUSR1  # Restart connection
+  signal SIGHUP   # Reload configuration
+  signal SIGTERM  # Graceful shutdown
+  signal SIGUSR2  # Write status to log
+  ```
+</Accordion>
+
+<Accordion title="verb - Adjust verbosity">
+  Change log verbosity at runtime:
+
+  ```bash
+  # Set to level 4
+  verb 4
+
+  # Show current setting
+  verb
+  ```
+</Accordion>
+
+<Accordion title="mute - Control message repetition">
+  Adjust mute parameter:
+
+  ```bash
+  # Mute after 40 repeated messages
+  mute 40
+
+  # Show current setting
+  mute
+  ```
+</Accordion>
+
+### Utility commands
+
+```bash
+# Show process ID
+pid
+
+# Show version information
+version
+
+# Exit management session
+exit
+quit
+```
+
+## Real-time notifications
+
+When monitoring is enabled, the management interface sends real-time messages with `>` prefix:
+
+<Accordion title="Notification types">
+  - **>BYTECOUNT:** - Bandwidth usage updates
+  - **>BYTECOUNT_CLI:** - Per-client bandwidth (server)
+  - **>CLIENT:** - Client connection/disconnection events
+  - **>ECHO:** - Echo messages from config
+  - **>FATAL:** - Fatal errors before exit
+  - **>HOLD:** - Hold state indication
+  - **>INFO:** - Informational messages
+  - **>LOG:** - Log message output
+  - **>NEED-OK:** - User action required
+  - **>NEED-STR:** - User input required
+  - **>PASSWORD:** - Password request or verification failure
+  - **>STATE:** - State changes
+  - **>INFOMSG:** - Authentication info from server
+</Accordion>
+
+### Client notifications (server mode)
+
+With `--management-client-auth`, monitor client lifecycle:
+
+```bash
+management-client-auth
+```
+
+**Notification sequence**:
+
+1. **CONNECT/REAUTH** - New connection or renegotiation
+   ```
+   >CLIENT:CONNECT,{CID},{KID}
+   >CLIENT:ENV,name1=val1
+   ...
+   >CLIENT:ENV,END
+   ```
+
+2. **ESTABLISHED** - Successful authentication
+   ```
+   >CLIENT:ESTABLISHED,{CID}
+   >CLIENT:ENV,name1=val1
+   ...
+   >CLIENT:ENV,END
+   ```
+
+3. **ADDRESS** - Virtual address assignment
+   ```
+   >CLIENT:ADDRESS,{CID},{ADDR},{PRI}
+   ```
+
+4. **DISCONNECT** - Client disconnection
+   ```
+   >CLIENT:DISCONNECT,{CID}
+   >CLIENT:ENV,name1=val1
+   ...
+   >CLIENT:ENV,END
+   ```
+
+<Note>
+  - CID = Client ID (sequential: 0, 1, 2, ...)
+  - KID = Key ID for TLS session
+  - PRI = Primary (1) or Secondary (0) address
+</Note>
+
+## Integration with monitoring tools
+
+### Prometheus exporter pattern
+
+Parse status file or use management interface:
+
+```python
+# Example: Parse status-version 3 format
+with open('/var/log/openvpn/status.log') as f:
+    for line in f:
+        if line.startswith('CLIENT_LIST'):
+            fields = line.strip().split('\t')
+            common_name = fields[1]
+            bytes_received = int(fields[8])
+            bytes_sent = int(fields[9])
+            # Export metrics...
+```
+
+### Log aggregation
+
+Forward logs to centralized systems:
+
+```bash
+# Use syslog forwarding
+syslog openvpn-server
+
+# Or configure log shipper (e.g., Filebeat, rsyslog)
+log-append /var/log/openvpn/server.log
+```
+
+### Health checks
+
+Implement monitoring checks:
+
+<Steps>
+  <Step title="Process check">
+    ```bash
+    systemctl is-active openvpn-server@server
+    ```
+  </Step>
+
+  <Step title="Interface check">
+    ```bash
+    ip link show tun0
+    ```
+  </Step>
+
+  <Step title="Management interface check">
+    ```bash
+    echo "state" | socat - UNIX-CONNECT:/var/run/openvpn/mgmt.sock
+    ```
+  </Step>
+
+  <Step title="Client count check (server)">
+    Parse status file for connected clients count
+  </Step>
+</Steps>
+
+## Alerting scenarios
+
+Monitor and alert on these conditions:
+
+<Accordion title="Connection failures">
+  - State stuck in RECONNECTING
+  - Repeated AUTH failures
+  - Certificate verification errors
+  - TLS negotiation failures
+</Accordion>
+
+<Accordion title="Performance issues">
+  - High packet loss
+  - Excessive replay warnings
+  - Low bandwidth throughput
+  - High CPU usage
+</Accordion>
+
+<Accordion title="Security events">
+  - Failed authentication attempts
+  - Certificate revocation list updates
+  - Management interface unauthorized access
+  - Unusual client connection patterns
+</Accordion>
+
+<Accordion title="Operational issues">
+  - Process restarts
+  - Configuration reload failures
+  - Disk space issues (log files)
+  - Interface creation failures
+</Accordion>

@@ -1,0 +1,420 @@
+---
+title: Encryption and cipher options
+description: Configure encryption, TLS, and cryptographic options for OpenVPN connections
+---
+
+## SSL library information
+
+These standalone options display information about the cryptographic library capabilities.
+
+<ParamField path="--show-ciphers" type="standalone">
+  Show all cipher algorithms available for use with the `--cipher` option.
+</ParamField>
+
+<ParamField path="--show-digests" type="standalone">
+  Show all message digest algorithms available for use with the `--auth` option.
+</ParamField>
+
+<ParamField path="--show-tls" type="standalone">
+  Show all TLS ciphers supported by the crypto library. OpenVPN uses TLS to secure the control channel, over which the keys that are used to protect the actual VPN traffic are exchanged.
+  
+  The TLS ciphers will be sorted from highest preference (most secure) to lowest.
+  
+  <Note>
+  Whether a cipher suite in this list can actually work depends on the specific setup of both peers (e.g. both peers must support the cipher, and an ECDSA cipher suite will not work if you are using an RSA certificate).
+  </Note>
+</ParamField>
+
+<ParamField path="--show-engines" type="standalone">
+  Show currently available hardware-based crypto acceleration engines supported by the OpenSSL library.
+</ParamField>
+
+<ParamField path="--show-groups" type="standalone">
+  Show all available elliptic curves/groups to use with the `--ecdh-curve` and `tls-groups` options.
+</ParamField>
+
+## Generating key material
+
+<ParamField path="--genkey" type="standalone">
+  Generate a key to be used of the specified type. If keyfile is left out or empty, the key will be output on stdout.
+  
+  **Syntax:**
+  ```bash
+  openvpn --genkey keytype keyfile
+  ```
+  
+  **Valid keytype arguments:**
+  
+  - `secret` - Standard OpenVPN shared secret keys
+  - `tls-crypt` - Alias for `secret`
+  - `tls-auth` - Alias for `secret`
+  - `auth-token` - Key used for `--auth-gen-token-key`
+  - `tls-crypt-v2-server` - TLS Crypt v2 server key
+  - `tls-crypt-v2-client` - TLS Crypt v2 client key
+  
+  **Examples:**
+  ```bash
+  openvpn --genkey secret shared.key
+  openvpn --genkey tls-crypt shared.key
+  openvpn --genkey tls-crypt-v2-server v2crypt-server.key
+  openvpn --tls-crypt-v2 v2crypt-server.key --genkey tls-crypt-v2-client v2crypt-client-1.key
+  ```
+</ParamField>
+
+<Accordion title="Generating shared secret keys">
+  Generate a shared secret for use with the `--tls-auth` or `--tls-crypt` options.
+  
+  ```bash
+  openvpn --genkey tls-crypt|tls-auth keyfile
+  ```
+  
+  The key is saved in `keyfile`. Both variants (`tls-crypt` and `tls-auth`) generate the same type of key.
+  
+  <Warning>
+  This file must be shared with the peer over a pre-existing secure channel such as `scp`.
+  </Warning>
+</Accordion>
+
+<Accordion title="Generating TLS Crypt v2 server key">
+  Generate a `--tls-crypt-v2` key to be used by an OpenVPN server.
+  
+  ```bash
+  openvpn --genkey tls-crypt-v2-server keyfile
+  ```
+</Accordion>
+
+<Accordion title="Generating TLS Crypt v2 client key">
+  Generate a `--tls-crypt-v2` key to be used by OpenVPN clients.
+  
+  ```bash
+  openvpn --genkey tls-crypt-v2-client keyfile [metadata]
+  ```
+  
+  If supplied, include the supplied `metadata` in the wrapped client key. This metadata must be supplied in base64-encoded form. The metadata must be at most 733 bytes long (980 characters in base64).
+  
+  If no metadata is supplied, OpenVPN will use a 64-bit unix timestamp representing the current time in UTC.
+  
+  <Note>
+  A tls-crypt-v2 client key is wrapped using a server key. To generate a client key, you must supply the server key using the `--tls-crypt-v2` option.
+  </Note>
+</Accordion>
+
+## Data channel cipher negotiation
+
+OpenVPN 2.4 and higher have the capability to negotiate the data cipher that is used to encrypt data packets.
+
+<Note>
+When both client and server are running OpenVPN 2.5 or later, the order of the ciphers in the server's `--data-ciphers` list is used to pick the data cipher. The first cipher in that list that is also in the client's `--data-ciphers` list is chosen.
+</Note>
+
+### OpenVPN 2.5 and later behavior
+
+OpenVPN 2.5 and later will only allow the ciphers specified in `--data-ciphers`. If `--data-ciphers` is not set, the default is `AES-256-GCM:AES-128-GCM`.
+
+In OpenVPN 2.6 and later, the default is changed to `AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305` when Chacha20-Poly1305 is available.
+
+<Warning>
+If no common cipher is found between client and server, the client is rejected with an `AUTH_FAILED` message:
+```
+AUTH: Received control message: AUTH_FAILED,Data channel cipher negotiation failed (no shared cipher)
+```
+</Warning>
+
+### Blowfish deprecation
+
+The `--cipher` option defaulted to `BF-CBC` in OpenVPN 2.4 and older versions. In OpenVPN 2.5 this behavior has changed so that if the `--cipher` is not explicitly set, it does not allow the weak `BF-CBC` cipher anymore.
+
+<Warning>
+We strongly recommend switching away from BF-CBC to a more secure cipher as soon as possible.
+</Warning>
+
+## Data channel renegotiation
+
+When running OpenVPN in client/server mode, the data channel will use a separate ephemeral encryption key which is rotated at regular intervals.
+
+<ParamField path="--reneg-bytes" type="number">
+  Renegotiate data channel key after n bytes sent or received (disabled by default with an exception).
+  
+  OpenVPN allows the lifetime of a key to be expressed as a number of bytes encrypted/decrypted, a number of packets, or a number of seconds. A key renegotiation will be forced if any of these three criteria are met by either peer.
+  
+  <Note>
+  If using ciphers with cipher block sizes less than 128-bits, `--reneg-bytes` is set to 64MB by default as protection against the SWEET32 attack vector. Explicitly disabling this by setting the value to 0 is **HIGHLY DISCOURAGED**.
+  </Note>
+  
+  <Warning>
+  When data channel offload (DCO) is enabled, this option is ignored. DCO does not support configurable renegotiation thresholds.
+  </Warning>
+</ParamField>
+
+<ParamField path="--reneg-pkts" type="number">
+  Renegotiate data channel key after n packets sent and received (disabled by default).
+  
+  <Warning>
+  When data channel offload (DCO) is enabled, this option is ignored.
+  </Warning>
+</ParamField>
+
+<ParamField path="--reneg-sec" type="number">
+  Renegotiate data channel key after at most `max` seconds (default 3600) and at least `min` seconds (default is 90% of max for servers, and equal to max for clients).
+  
+  **Syntax:**
+  ```
+  reneg-sec max [min]
+  ```
+  
+  The effective `--reneg-sec` value used is per session pseudo-uniform-randomized between `min` and `max`.
+  
+  With the default value of 3600, this results in an effective per session value in the range of 3240..3600 seconds for servers, or just 3600 for clients.
+  
+  <Note>
+  When using dual-factor authentication, this default value may cause the end user to be challenged to reauthorize once per hour.
+  </Note>
+  
+  <Warning>
+  Both client and server must be configured with compatible values. The side with the lower value will trigger the renegotiation. A common mistake is to set `--reneg-sec` to a higher value on one side while the other side uses the default 3600 seconds.
+  </Warning>
+</ParamField>
+
+## TLS mode options
+
+TLS mode is the most powerful crypto mode of OpenVPN in both security and flexibility. TLS mode works by establishing control and data channels which are multiplexed over a single TCP/UDP port.
+
+<Note>
+To use TLS mode, each peer that runs OpenVPN should have its own local certificate/key pair (`--cert` and `--key`), signed by the root certificate which is specified in `--ca`.
+</Note>
+
+<ParamField path="--ca" type="file">
+  Certificate authority (CA) file in .pem format, also referred to as the root certificate.
+  
+  This file can have multiple certificates in .pem format, concatenated together. You can construct your own certificate authority certificate and private key by using:
+  
+  ```bash
+  openssl req -nodes -new -x509 -keyout ca.key -out ca.crt
+  ```
+  
+  <Warning>
+  Never use the test certificates and test keys distributed with OpenVPN in a production environment, since they are distributed publicly and are totally insecure.
+  </Warning>
+</ParamField>
+
+<ParamField path="--cert" type="file|uri">
+  Local peer's signed certificate in .pem format or as a URI. Must be signed by a certificate authority whose certificate is in `--ca file` in the peer configuration.
+  
+  URI is supported only when built with OpenSSL 3.0 or later. Types of URIs supported depend on providers. OpenSSL has internal support for `file:/absolute/path` URI. PKCS#11 URI (RFC 7512) is supported by pkcs11-provider.
+  
+  Each peer in an OpenVPN link running in TLS mode should have its own certificate and private key file.
+  
+  **Example generation:**
+  ```bash
+  openssl req -nodes -new -keyout mycert.key -out mycert.csr
+  openssl ca -out mycert.crt -in mycert.csr
+  ```
+</ParamField>
+
+<ParamField path="--key" type="file|uri">
+  Local peer's private key in .pem format or a URI. Use the private key which was generated when you built your peer's certificate.
+  
+  URI is supported only when built with OpenSSL 3.0 or later.
+</ParamField>
+
+<ParamField path="--dh" type="file">
+  File containing finite field Diffie Hellman parameters in .pem format (used by `--tls-server` only).
+  
+  Set to `none` to disable fine field Diffie Hellman key exchange (and to only use ECDH or newer hybrid key agreement algorithms like X25519MLKEM768 instead).
+  
+  <Note>
+  Starting with OpenVPN 2.7.0, not specifying `--dh` is the same as setting it to `none`. It is recommended to use `none` as finite field Diffie Hellman has been replaced by more modern variants like ECDH.
+  </Note>
+  
+  Diffie Hellman parameters can be generated using:
+  ```bash
+  openssl dhparam -out dh2048.pem 2048
+  ```
+</ParamField>
+
+<ParamField path="--tls-auth" type="file">
+  Add an additional layer of HMAC authentication on top of the TLS control channel to mitigate DoS attacks and attacks on the TLS stack.
+  
+  **Syntax:**
+  ```
+  tls-auth file [direction]
+  ```
+  
+  The file is in OpenVPN static key format which can be generated by `--genkey`.
+  
+  The optional `direction` parameter enables the use of 2 distinct keys (HMAC-send, HMAC-receive), so that each data flow direction has a different HMAC key. When used, one side should use `0` and the other should use `1`, or both sides should omit it altogether.
+  
+  <Note>
+  `--tls-auth` is recommended when running OpenVPN in a mode where it is listening for packets from any IP address, such as when `--remote` is not specified, or `--remote` is specified with `--float`.
+  </Note>
+</ParamField>
+
+<ParamField path="--tls-crypt" type="file">
+  Encrypt and authenticate all control channel packets with the key from keyfile.
+  
+  Encrypting (and authenticating) control channel packets:
+  - Provides more privacy by hiding the certificate used for the TLS connection
+  - Makes it harder to identify OpenVPN traffic as such
+  - Provides "poor-man's" post-quantum security, against attackers who will never know the pre-shared key (i.e. no forward secrecy)
+  
+  In contrast to `--tls-auth`, `--tls-crypt` does not require the user to set `--key-direction`.
+  
+  <Warning>
+  All peers use the same `--tls-crypt` pre-shared group key. For large setups or setups where clients are not trusted, consider using `--tls-crypt-v2` instead, which uses per-client unique keys.
+  </Warning>
+</ParamField>
+
+<ParamField path="--tls-crypt-v2" type="file">
+  Use client-specific tls-crypt keys.
+  
+  **Syntax:**
+  ```
+  tls-crypt-v2 keyfile [force-cookie|allow-noncookie]
+  ```
+  
+  For clients, `keyfile` is a client-specific tls-crypt key generated using `--genkey tls-crypt-v2-client`.
+  
+  For servers, `keyfile` is used to unwrap client-specific keys supplied by the client during connection setup.
+  
+  The optional `force-cookie` parameter allows only tls-crypt-v2 clients that support a cookie based stateless three way handshake (OpenVPN 2.6 and later). The option `allow-noncookie` explicitly allows older tls-crypt-v2 clients.
+</ParamField>
+
+<ParamField path="--tls-client" type="boolean">
+  Enable TLS and assume client role during TLS handshake.
+</ParamField>
+
+<ParamField path="--tls-server" type="boolean">
+  Enable TLS and assume server role during TLS handshake.
+  
+  <Note>
+  OpenVPN is designed as a peer-to-peer application. The designation of client or server is only for the purpose of negotiating the TLS control channel.
+  </Note>
+</ParamField>
+
+<ParamField path="--tls-cipher" type="list">
+  A list of allowable TLS ciphers delimited by a colon (`:`).
+  
+  This setting can be used to ensure that certain cipher suites are used (or not used) for the TLS connection. For OpenSSL, the `--tls-cipher` option is used for TLS 1.2 and below.
+  
+  Use `--show-tls` to see a list of TLS ciphers supported by your crypto library.
+  
+  Default for OpenSSL: `DEFAULT:!EXP:!LOW:!MEDIUM:!kDH:!kECDH:!DSS:!PSK:!SRP:!kRSA`
+  
+  <Warning>
+  This is an expert feature. If used incorrectly, it can break your connection. Use with care!
+  </Warning>
+</ParamField>
+
+<ParamField path="--tls-ciphersuites" type="list">
+  Same as `--tls-cipher` but for TLS 1.3 and up.
+  
+  <Note>
+  mbed TLS has no TLS 1.3 support yet and only the `--tls-cipher` setting is used.
+  </Note>
+</ParamField>
+
+<ParamField path="--tls-version-min" type="string">
+  Sets the minimum TLS version we will accept from the peer (default in 2.6.0 and later is "1.2").
+  
+  **Syntax:**
+  ```
+  tls-version-min version ['or-highest']
+  ```
+  
+  Examples for version include `1.0`, `1.1`, or `1.2`. If `or-highest` is specified and version is not recognized, we will only accept the highest TLS version supported by the local SSL implementation.
+</ParamField>
+
+<ParamField path="--tls-version-max" type="string">
+  Set the maximum TLS version we will use (default is the highest version supported).
+  
+  Examples for version include `1.0`, `1.1`, or `1.2`.
+</ParamField>
+
+<ParamField path="--remote-cert-tls" type="string">
+  Require that peer certificate was signed with an explicit key usage and extended key usage based on RFC3280 TLS rules.
+  
+  **Valid values:**
+  - `server` - Use on clients to verify they are connecting to a designated server
+  - `client` - Use on servers to verify only hosts with a client certificate can connect
+  
+  <Note>
+  This is an important security precaution to protect against a man-in-the-middle attack where an authorized client attempts to connect to another client by impersonating the server.
+  </Note>
+</ParamField>
+
+<ParamField path="--verify-x509-name" type="string">
+  Accept connections only if a host's X.509 name is equal to the specified name.
+  
+  **Syntax:**
+  ```
+  verify-x509-name name type
+  ```
+  
+  `type` can be:
+  - `subject` - Match the complete subject DN (default)
+  - `name` - Match a subject RDN
+  - `name-prefix` - Match a subject RDN prefix
+  
+  **Examples:**
+  ```
+  verify-x509-name 'C=KG, ST=NA, L=Bishkek, CN=Server-1'
+  verify-x509-name Server-1 name
+  verify-x509-name Server- name-prefix
+  ```
+</ParamField>
+
+<ParamField path="--peer-fingerprint" type="string">
+  Specify a SHA256 fingerprint or list of SHA256 fingerprints to verify the peer certificate against.
+  
+  The peer certificate must match one of the fingerprints or certificate verification will fail.
+  
+  **Example:**
+  ```
+  peer-fingerprint AD:B0:95:D8:09:...
+  ```
+  
+  <Note>
+  When the `--peer-fingerprint` option is used, specifying a CA with `--ca` or `--capath` is optional. This allows `--peer-fingerprint` to be used as an alternative to a PKI with self-signed certificates for small setups.
+  </Note>
+</ParamField>
+
+## PKCS#11 and SmartCard options
+
+<ParamField path="--pkcs11-providers" type="list">
+  Specify RSA Security Inc. PKCS #11 Cryptographic Token Interface (Cryptoki) providers to load. A space-separated list of one or more provider library names may be specified.
+  
+  This option along with `--pkcs11-id` or `pkcs11-id-management` can be used instead of `--cert` and `--key` or `--pkcs12`.
+  
+  <Note>
+  If p11-kit is present on the system and was enabled during build, its `p11-kit-proxy.so` module will be loaded by default if either the `--pkcs11-id` or `--pkcs11-id-management` options is present without `--pkcs11-providers`.
+  </Note>
+</ParamField>
+
+<ParamField path="--pkcs11-id" type="string">
+  Specify the serialized certificate id to be used. The id can be obtained by the standalone `--show-pkcs11-ids` option.
+</ParamField>
+
+<ParamField path="--show-pkcs11-ids" type="standalone">
+  Show PKCS#11 token object list.
+  
+  **Syntax:**
+  ```bash
+  openvpn --show-pkcs11-ids [provider] [cert_private]
+  ```
+  
+  Specify `cert_private` as `1` if certificates are stored as private objects.
+</ParamField>
+
+<ParamField path="--pkcs11-pin-cache" type="number">
+  Specify how many seconds the PIN can be cached. The default is until the token is removed.
+</ParamField>
+
+<ParamField path="--pkcs11-private-mode" type="string">
+  Specify which method to use to perform private key operations. Mode is encoded as hex number:
+  
+  - `0` (default) - Try to determine automatically
+  - `1` - Use sign
+  - `2` - Use sign recover
+  - `4` - Use decrypt
+  - `8` - Use unwrap
+</ParamField>

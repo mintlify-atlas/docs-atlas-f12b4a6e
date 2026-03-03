@@ -1,0 +1,430 @@
+---
+title: Client options
+description: Client-specific command line options for connecting to OpenVPN servers
+---
+
+The client options are used when connecting to an OpenVPN server configured to use `--server`, `--server-bridge`, or `--mode server` in its configuration.
+
+## Basic client setup
+
+<ParamField path="--client" type="flag">
+  A helper directive designed to simplify the configuration of OpenVPN's client mode.
+  
+  This directive is equivalent to:
+  ```
+  pull
+  tls-client
+  ```
+  
+  ```bash
+  openvpn --client --remote server.example.com
+  ```
+</ParamField>
+
+<ParamField path="--pull" type="flag">
+  This option must be used on a client which is connecting to a multi-client server. It indicates to OpenVPN that it should accept options pushed by the server, provided they are part of the legal set of pushable options.
+  
+  <Note>
+  The `--pull` option is implied by `--client`.
+  </Note>
+  
+  In particular, `--pull` allows the server to push routes to the client, so you should not use `--pull` or `--client` in situations where you don't trust the server to have control over the client's routing table.
+  
+  ```bash
+  openvpn --pull --tls-client
+  ```
+</ParamField>
+
+## Server connection
+
+<ParamField path="--remote" type="string">
+  Remote host name or IP address, port and protocol.
+  
+  **Default port:** Not specified (typically 1194)
+  
+  **Default protocol:** `udp`
+  
+  The `port` and `proto` arguments are optional. The OpenVPN client will try to connect to a server at `host:port`. The `proto` argument indicates the protocol to use when connecting with the remote, and may be `tcp` or `udp`. To enforce IPv4 or IPv6 connections add a `4` or `6` suffix; like `udp4` / `udp6` / `tcp4` / `tcp6`.
+  
+  On the client, multiple `--remote` options may be specified for redundancy, each referring to a different OpenVPN server. The client will move on to the next host in the list, in the event of connection failure.
+  
+  ```bash
+  # Basic connection
+  openvpn --remote server1.example.net
+  
+  # With port
+  openvpn --remote server1.example.net 1194
+  
+  # With port and protocol
+  openvpn --remote server2.example.net 1194 tcp
+  
+  # Multiple remotes for redundancy
+  openvpn --remote server1.example.net \\
+          --remote server2.example.net \\
+          --remote server3.example.net
+  ```
+  
+  <Note>
+  Since UDP is connectionless, connection failure is defined by the `--ping` and `--ping-restart` options.
+  </Note>
+</ParamField>
+
+<ParamField path="--remote-random" type="flag">
+  When multiple `--remote` address/ports are specified, or if connection profiles are being used, initially randomize the order of the list as a kind of basic load-balancing measure.
+  
+  ```bash
+  openvpn --remote server1.example.net \\
+          --remote server2.example.net \\
+          --remote-random
+  ```
+</ParamField>
+
+<ParamField path="--remote-random-hostname" type="flag">
+  Prepend a random string (6 bytes, 12 hex characters) to hostname to prevent DNS caching. For example, "foo.bar.gov" would be modified to "`<random-chars>.foo.bar.gov`".
+  
+  ```bash
+  openvpn --remote-random-hostname
+  ```
+</ParamField>
+
+<ParamField path="--resolv-retry" type="string">
+  If hostname resolve fails for `--remote`, retry resolve for `n` seconds before failing.
+  
+  Set `n` to `infinite` to retry indefinitely.
+  
+  **Default:** `infinite`
+  
+  You can disable by setting n=0.
+  
+  ```bash
+  # Retry indefinitely (default)
+  openvpn --resolv-retry infinite
+  
+  # Retry for 60 seconds
+  openvpn --resolv-retry 60
+  
+  # Don't retry
+  openvpn --resolv-retry 0
+  ```
+</ParamField>
+
+## Connection retry and timeout
+
+<ParamField path="--connect-retry" type="integer">
+  Wait `n` seconds between connection attempts.
+  
+  **Default:** `1` second
+  
+  **Default max:** `300` seconds
+  
+  Repeated reconnection attempts are slowed down after 5 retries per remote by doubling the wait time after each unsuccessful attempt.
+  
+  If the optional argument `max` is specified, the maximum wait time in seconds gets capped at that value.
+  
+  ```bash
+  # Wait 5 seconds between retries
+  openvpn --connect-retry 5
+  
+  # Wait 5 seconds, cap at 60 seconds max
+  openvpn --connect-retry 5 60
+  ```
+</ParamField>
+
+<ParamField path="--connect-retry-max" type="integer">
+  `n` specifies the number of times each `--remote` or `<connection>` entry is tried. Specifying `n` as `1` would try each entry exactly once. A successful connection resets the counter.
+  
+  **Default:** unlimited
+  
+  ```bash
+  openvpn --connect-retry-max 3
+  ```
+</ParamField>
+
+<ParamField path="--server-poll-timeout" type="integer">
+  When connecting to a remote server do not wait for more than `n` seconds for a response before trying the next server.
+  
+  **Default:** `120` seconds
+  
+  This timeout includes proxy and TCP connect timeouts.
+  
+  ```bash
+  openvpn --server-poll-timeout 30
+  ```
+</ParamField>
+
+<ParamField path="--connect-timeout" type="integer">
+  See `--server-poll-timeout`.
+</ParamField>
+
+## Authentication
+
+<ParamField path="--auth-user-pass" type="string" optional>
+  Authenticate with server using username/password.
+  
+  If `up` is present, it must be a file containing username/password on 2 lines. If the password line is missing, OpenVPN will prompt for one.
+  
+  If `up` is omitted, username/password will be prompted from the console.
+  
+  This option can also be inlined:
+  ```
+  <auth-user-pass>
+  username
+  [password]
+  </auth-user-pass>
+  ```
+  
+  The server configuration must specify an `--auth-user-pass-verify` script to verify the username/password provided by the client.
+  
+  ```bash
+  # Prompt for credentials
+  openvpn --auth-user-pass
+  
+  # Read from file
+  openvpn --auth-user-pass /etc/openvpn/credentials.txt
+  ```
+</ParamField>
+
+<ParamField path="--auth-retry" type="string">
+  Controls how OpenVPN responds to username/password verification errors such as the client-side response to an `AUTH_FAILED` message from the server or verification failure of the private key password.
+  
+  Normally used to prevent auth errors from being fatal on the client side, and to permit username/password requeries in case of error.
+  
+  **Default:** `none`
+  
+  `type` can be one of:
+  
+  - **none** - Client will exit with a fatal error (this is the default)
+  - **nointeract** - Client will retry the connection without requerying for an `--auth-user-pass` username/password. Use this option for unattended clients.
+  - **interact** - Client will requery for an `--auth-user-pass` username/password and/or private key password before attempting a reconnection
+  
+  ```bash
+  # Retry without prompting (for unattended clients)
+  openvpn --auth-retry nointeract
+  
+  # Retry with prompting
+  openvpn --auth-retry interact
+  ```
+</ParamField>
+
+<ParamField path="--auth-token" type="string">
+  This is not an option to be used directly in any configuration files, but rather push this option from a `--client-connect` script or a `--plugin`.
+  
+  This option provides a possibility to replace the clients password with an authentication token during the lifetime of the OpenVPN client.
+  
+  The purpose of this is to enable two factor authentication methods, such as HOTP or TOTP, to be used without needing to retrieve a new OTP code each time the connection is renegotiated.
+  
+  Newer clients (2.4.7+) will fall back to the original password method after a failed auth. Older clients will keep using the token value and react according to `--auth-retry`.
+</ParamField>
+
+<ParamField path="--auth-token-user" type="string">
+  Companion option to `--auth-token`. This options allows one to override the username used by the client when reauthenticating with the `auth-token`. It also allows one to use `--auth-token` in setups that normally do not use username and password.
+  
+  The username has to be base64 encoded.
+</ParamField>
+
+<ParamField path="--static-challenge" type="string">
+  Enable static challenge/response protocol.
+  
+  The `text` challenge text is presented to the user which describes what information is requested. The `echo` flag indicates if the user's input should be echoed on the screen. Valid `echo` values are `0` or `1`. The optional `format` indicates whether the password and response should be combined using the SCRV1 protocol (`format` = `scrv1`) or simply concatenated (`format` = `concat`).
+  
+  **Default format:** `scrv1`
+  
+  ```bash
+  openvpn --static-challenge "Enter OTP code" 1
+  ```
+</ParamField>
+
+## DNS configuration
+
+<ParamField path="--dns" type="string">
+  Client DNS configuration to be used with the connection.
+  
+  The `--dns search-domains` directive takes one or more domain names to be added as DNS domain suffixes. If it is repeated multiple times within a configuration the domains are appended.
+  
+  The `--dns server` directive is used to configure DNS server `n`. The server id `n` must be a value between -128 and 127. For pushed DNS server options it must be between 0 and 127.
+  
+  ```bash
+  # Add search domains
+  openvpn --dns search-domains example.com internal.local
+  
+  # Configure DNS server with address
+  openvpn --dns server 0 address 8.8.8.8
+  
+  # Configure DNS server with resolve domains (split DNS)
+  openvpn --dns server 1 address 10.0.0.1 resolve-domains internal.example.com
+  
+  # Configure DNS-over-HTTPS
+  openvpn --dns server 0 address 1.1.1.1:443 transport DoH sni cloudflare-dns.com
+  
+  # Enable DNSSEC
+  openvpn --dns server 0 address 8.8.8.8 dnssec yes
+  ```
+  
+  <Accordion title="DNS server configuration options">
+  
+  - **address** - Configure IPv4 and/or IPv6 address(es) of the DNS server. Up to eight addresses can be specified per DNS server. Optionally a port can be appended after a colon. IPv6 addresses need to be enclosed in brackets if a port is appended.
+  - **resolve-domains** - Define a split-dns or dns-routing setup, where only the given domains are resolved by the server
+  - **dnssec** - Configure validation of DNSSEC records (`yes`, `optional`, or `no`)
+  - **transport** - Enable DNS-over-HTTPS (`DoH`) or DNS-over-TLS (`DoT`) for a DNS server
+  - **sni** - Specify the server-name for TLS server name indication
+  
+  </Accordion>
+  
+  <Note>
+  The `--dns` option will eventually obsolete the `--dhcp-option` directive. Until then it will replace configuration at the places `--dhcp-option` puts it, so that `--dns` overrides `--dhcp-option`.
+  </Note>
+</ParamField>
+
+## Pull filtering
+
+<ParamField path="--pull-filter" type="string">
+  Filter options on the client pushed by the server to the client.
+  
+  Filter options received from the server if the option starts with `text`. The action flag `accept` allows the option, `ignore` removes it and `reject` flags an error and triggers a `SIGUSR1` restart. The filters may be specified multiple times, and each filter is applied in the order it is specified.
+  
+  ```bash
+  # Accept specific routes only
+  openvpn --pull-filter accept "route 192.168.1." \\
+          --pull-filter ignore "route "
+  
+  # Ignore all pushed routes
+  openvpn --pull-filter ignore "route"
+  
+  # Reject specific options
+  openvpn --pull-filter reject "redirect-gateway"
+  ```
+  
+  <Note>
+  Prefix comparison is used to match `text` against the received option, so `pull-filter ignore "route"` would remove all pushed options starting with `route` which would include, for example, `route-gateway`.
+  </Note>
+  
+  <Note>
+  `pull-filter` cannot be relied upon as a security measure to protect against offending options pushed by a server. For example, the filter could be defeated by pushing options with extra spaces between tokens or other formatting variations.
+  </Note>
+</ParamField>
+
+## Network options
+
+<ParamField path="--allow-pull-fqdn" type="flag">
+  Allow client to pull DNS names from server (rather than being limited to IP address) for `--ifconfig`, `--route`, and `--route-gateway`.
+  
+  ```bash
+  openvpn --allow-pull-fqdn
+  ```
+</ParamField>
+
+<ParamField path="--allow-recursive-routing" type="flag">
+  When this option is set, OpenVPN will not drop incoming tun packets with same destination as host.
+  
+  ```bash
+  openvpn --allow-recursive-routing
+  ```
+</ParamField>
+
+<ParamField path="--client-nat" type="string">
+  This pushable client option sets up a stateless one-to-one NAT rule on packet addresses (not ports), and is useful in cases where routes or ifconfig settings pushed to the client would create an IP numbering conflict.
+  
+  `network/netmask` defines the local view of a resource from the client perspective, while `alias/netmask` defines the remote view from the server perspective.
+  
+  Use `snat` (source NAT) for resources owned by the client and `dnat` (destination NAT) for remote resources.
+  
+  ```bash
+  # Source NAT
+  openvpn --client-nat snat 192.168.0.0/255.255.0.0
+  
+  # Destination NAT
+  openvpn --client-nat dnat 10.64.0.0/255.255.0.0
+  ```
+  
+  <Note>
+  Set `--verb 6` for debugging info showing the transformation of src/dest addresses in packets.
+  </Note>
+</ParamField>
+
+<ParamField path="--proto-force" type="string">
+  When iterating through connection profiles, only consider profiles using protocol `p` (`tcp` | `udp`).
+  
+  <Note>
+  This specifically only filters by the transport layer protocol, i.e. UDP or TCP. This does not affect whether IPv4 or IPv6 is used as IP protocol.
+  </Note>
+  
+  ```bash
+  openvpn --proto-force udp
+  ```
+</ParamField>
+
+## Peer information
+
+<ParamField path="--push-peer-info" type="flag">
+  Push additional information about the client to server. The following data is always pushed to the server:
+  
+  - `IV_VER` - The client OpenVPN version
+  - `IV_PLAT` - The client OS platform (linux, solaris, openbsd, mac, netbsd, freebsd, win)
+  - `IV_PROTO` - Details about protocol extensions that the peer supports
+  - `IV_NCP` - Negotiable ciphers (deprecated in favor of IV_CIPHERS)
+  - `IV_CIPHERS` - The list of supported ciphers configured with `--data-ciphers`
+  - `IV_MTU` - The maximum MTU the client is willing to accept
+  
+  When `--push-peer-info` is enabled, additional information is sent:
+  
+  - `IV_HWADDR` - Unique and persistent ID of the client (usually MAC address)
+  - `IV_SSL` - The SSL library version used by the client
+  - `IV_PLAT_VER` - The version of the operating system
+  - `UV_<name>` - Client environment variables whose names start with `UV_`
+  
+  ```bash
+  openvpn --push-peer-info
+  ```
+</ParamField>
+
+## Session management
+
+<ParamField path="--single-session" type="flag">
+  After initially connecting to a remote peer, disallow any new connections. Using this option means that a remote peer cannot connect, disconnect, and then reconnect.
+  
+  If the daemon is reset by a signal or `--ping-restart`, it will allow one new connection.
+  
+  `--single-session` can be used with `--ping-exit` or `--inactive` to create a single dynamic session that will exit when finished.
+  
+  ```bash
+  openvpn --single-session --inactive 3600
+  ```
+</ParamField>
+
+<ParamField path="--inactive" type="integer">
+  Causes OpenVPN to exit after `n` seconds of inactivity on the TUN/TAP device. The time length of inactivity is measured since the last incoming or outgoing tunnel packet.
+  
+  **Default:** `0` (disabled)
+  
+  If the optional `bytes` parameter is included, exit if less than `bytes` of combined in/out traffic are produced on the tun/tap device in `n` seconds.
+  
+  ```bash
+  # Exit after 300 seconds of inactivity
+  openvpn --inactive 300
+  
+  # Exit after 300 seconds with less than 1000 bytes
+  openvpn --inactive 300 1000
+  ```
+  
+  <Note>
+  OpenVPN's internal ping packets (which are just keepalives) and TLS control packets are not considered "activity", nor are they counted as traffic.
+  </Note>
+</ParamField>
+
+<ParamField path="--explicit-exit-notify" type="integer" optional>
+  In UDP client mode or point-to-point mode, send server/peer an exit notification if tunnel is restarted or OpenVPN process is exited. In client mode, on exit/restart, this option will tell the server to immediately close its client instance object rather than waiting for a timeout.
+  
+  **Default:** `1` (if not specified)
+  
+  If both server and client support sending this message using the control channel, the message will be sent as control-channel message. Otherwise the message is sent as data-channel message, which will be ignored by data-channel offloaded peers.
+  
+  The `n` parameter controls the maximum number of attempts that the client will try to resend the exit notification message if messages are sent in data-channel mode.
+  
+  ```bash
+  # Enable with default retry count
+  openvpn --explicit-exit-notify
+  
+  # Enable with custom retry count
+  openvpn --explicit-exit-notify 3
+  ```
+</ParamField>

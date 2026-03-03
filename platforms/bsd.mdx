@@ -1,0 +1,432 @@
+---
+title: BSD
+description: BSD-specific installation and setup information for OpenVPN (FreeBSD, OpenBSD, NetBSD, DragonFly BSD)
+---
+
+OpenVPN supports multiple BSD variants with built-in TUN/TAP drivers and native kernel integration.
+
+## Platform status
+
+**FreeBSD** is a **Tier 1 platform** - actively tested for every source commit across multiple FreeBSD versions.
+
+**Other BSD variants** (OpenBSD, NetBSD, DragonFly BSD) are **Tier 2 platforms** - functionality is maintained but not actively tested on latest versions.
+
+## FreeBSD
+
+FreeBSD provides first-class OpenVPN support with modern kernel features.
+
+### TUN/TAP driver
+
+FreeBSD ships with integrated TUN/TAP driver support.
+
+**Device nodes:** `tap0`, `tap1`, `tap2`, `tap3`, `tun0`, `tun1`, `tun2`, `tun3` are created by default.
+
+#### Driver loading
+
+**FreeBSD 12.0+:**
+TUN/TAP drivers are integrated and always loaded. No manual loading required.
+
+**FreeBSD prior to 12.0:**
+The TAP driver needed manual loading:
+
+```bash
+kldload if_tap
+```
+
+To load automatically at boot, add to `/boot/loader.conf`:
+```
+if_tap_load="YES"
+```
+
+### Data Channel Offload (ovpn)
+
+FreeBSD 14+ includes the `ovpn(4)` kernel module for data channel offload.
+
+<Info>
+OpenVPN 2.6+ automatically uses ovpn(4) on FreeBSD 14+ if available for kernel-level acceleration.
+</Info>
+
+**Features:**
+- Kernel-level OpenVPN data packet processing
+- Significant performance improvements
+- Automatic detection and usage by OpenVPN 2.6+
+
+**Check if available:**
+```bash
+kldstat | grep ovpn
+```
+
+### Installation
+
+<Tabs>
+  <Tab title="Packages">
+    Install OpenVPN using pkg:
+
+    ```bash
+    pkg install openvpn
+    ```
+  </Tab>
+  
+  <Tab title="Ports">
+    Build from FreeBSD ports:
+
+    ```bash
+    cd /usr/ports/security/openvpn
+    make install clean
+    ```
+  </Tab>
+  
+  <Tab title="From source">
+    Build OpenVPN from source:
+
+    ```bash
+    ./configure && make && sudo make install
+    ```
+  </Tab>
+</Tabs>
+
+### Service management
+
+Enable OpenVPN service:
+
+```bash
+sysrc openvpn_enable="YES"
+sysrc openvpn_configfile="/usr/local/etc/openvpn/server.conf"
+```
+
+Start the service:
+```bash
+service openvpn start
+```
+
+### Topology subnet mode
+
+FreeBSD tun interfaces with `--topology subnet` are put into real subnet mode (IFF_BROADCAST) instead of point-to-point mode (IFF_POINTOPOINT).
+
+<Note>
+This change (introduced in OpenVPN 2.4+) might affect software that enumerates interfaces looking for broadcast capability, but normal operations are unaffected.
+</Note>
+
+### FreeBSD-specific features
+
+#### IPv4 forwarding
+
+Enable IP forwarding for routing:
+
+```bash
+sysctl net.inet.ip.forwarding=1
+```
+
+Make persistent in `/etc/sysctl.conf`:
+```
+net.inet.ip.forwarding=1
+```
+
+#### IPv6 forwarding
+
+Enable IPv6 forwarding:
+
+```bash
+sysctl net.inet6.ip6.forwarding=1
+```
+
+#### Firewall (pf)
+
+Configure packet filter for VPN:
+
+**/etc/pf.conf:**
+```
+# VPN interface
+vpn_if="tun0"
+ext_if="em0"
+
+# NAT for VPN clients
+nat on $ext_if from $vpn_if:network to any -> ($ext_if)
+
+# Allow VPN traffic
+pass on $vpn_if all
+```
+
+Reload rules:
+```bash
+pfctl -f /etc/pf.conf
+```
+
+## OpenBSD
+
+OpenBSD provides secure and reliable OpenVPN support with dynamic TUN device creation.
+
+### TUN/TAP driver
+
+OpenBSD has dynamically created `tun*` devices.
+
+**Create devices at boot:**
+Create empty hostname files for each tun device:
+
+```bash
+touch /etc/hostname.tun0
+touch /etc/hostname.tun1
+touch /etc/hostname.tun2
+```
+
+Devices are automatically created on boot.
+
+### Installation
+
+```bash
+pkg_add openvpn
+```
+
+### Service management
+
+Enable and start OpenVPN:
+
+```bash
+rcctl enable openvpn
+rcctl start openvpn
+```
+
+### Firewall (pf)
+
+OpenBSD uses pf as its firewall:
+
+**/etc/pf.conf:**
+```
+# VPN configuration
+pass on tun0 all
+match out on egress inet from tun0:network to any nat-to (egress)
+```
+
+Reload:
+```bash
+pfctl -f /etc/pf.conf
+```
+
+## NetBSD
+
+NetBSD provides stable OpenVPN support with integrated TUN/TAP drivers.
+
+### Installation
+
+```bash
+pkgin install openvpn
+```
+
+Or from pkgsrc:
+```bash
+cd /usr/pkgsrc/security/openvpn
+make install
+```
+
+### TUN/TAP driver
+
+NetBSD includes TUN/TAP drivers in the kernel. Devices are created dynamically or can be pre-created:
+
+```bash
+cd /dev
+./MAKEDEV tun0 tun1 tun2
+```
+
+## DragonFly BSD
+
+DragonFly BSD maintains compatibility with FreeBSD's TUN/TAP implementation.
+
+### Installation
+
+```bash
+pkg install openvpn
+```
+
+### TUN/TAP driver
+
+DragonFly BSD includes TUN/TAP support similar to FreeBSD. Device nodes are available by default.
+
+## Common BSD configuration
+
+### System requirements
+
+- **OpenSSL 1.1.0+** or **mbed TLS 3.2.1+**: For encryption
+- **LZO** (optional): For compression
+- **LZ4** (optional): For LZ4 compression
+
+### Building from source
+
+All BSD variants support building from source:
+
+```bash
+./configure && make && sudo make install
+```
+
+For git repository:
+```bash
+autoreconf -i -v -f
+./configure
+make
+sudo make install
+```
+
+### IP forwarding
+
+**IPv4:**
+```bash
+sysctl net.inet.ip.forwarding=1
+```
+
+**IPv6:**
+```bash
+sysctl net.inet6.ip6.forwarding=1
+```
+
+### Sample server configuration
+
+**/usr/local/etc/openvpn/server.conf:**
+```
+port 1194
+proto udp
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+dh dh2048.pem
+server 10.8.0.0 255.255.255.0
+push "redirect-gateway def1"
+push "dhcp-option DNS 8.8.8.8"
+keepalive 10 120
+cipher AES-256-GCM
+user nobody
+group nobody
+persist-key
+persist-tun
+verb 3
+```
+
+### Sample client configuration
+
+**/usr/local/etc/openvpn/client.conf:**
+```
+client
+dev tun
+proto udp
+remote vpn.example.com 1194
+resolv-retry infinite
+nobind
+user nobody
+group nobody
+persist-key
+persist-tun
+ca ca.crt
+cert client.crt
+key client.key
+remote-cert-tls server
+cipher AES-256-GCM
+verb 3
+```
+
+## BSD-specific considerations
+
+### User/group names
+
+BSD systems often use different unprivileged user names:
+
+- FreeBSD: `nobody:nobody`
+- OpenBSD: `_openvpn:_openvpn` (create dedicated user)
+- NetBSD: `nobody:nobody`
+
+### Device permissions
+
+Ensure proper device permissions:
+
+```bash
+chown root:wheel /dev/tun*
+chmod 0660 /dev/tun*
+```
+
+### Routing
+
+BSD routing uses `route` command:
+
+```bash
+route add -net 10.8.0.0/24 -interface tun0
+```
+
+### Process management
+
+Run as daemon:
+
+```bash
+openvpn --config /usr/local/etc/openvpn/server.conf --daemon
+```
+
+## Performance optimization
+
+### Buffer sizes
+
+Increase socket buffers for better throughput:
+
+```
+sndbuf 393216
+rcvbuf 393216
+```
+
+### MTU settings
+
+Optimize MTU for your network:
+
+```
+tun-mtu 1500
+mssfix 1400
+```
+
+### Fast I/O
+
+Disable compression for high-speed links:
+
+```
+compress migrate
+```
+
+## Troubleshooting
+
+### Permission errors
+
+**Symptom:** Cannot open TUN device
+
+**Solution:**
+1. Check device nodes exist: `ls -l /dev/tun*`
+2. Verify permissions
+3. Run as root initially to diagnose
+
+### Routing issues
+
+**Symptom:** Cannot reach remote networks
+
+**Solution:**
+1. Verify IP forwarding: `sysctl net.inet.ip.forwarding`
+2. Check firewall rules: `pfctl -sr`
+3. Verify routes: `netstat -rn`
+
+### Connection timeouts
+
+**Symptom:** Connection hangs during handshake
+
+**Solution:**
+1. Check firewall allows UDP port 1194
+2. Verify server is listening: `sockstat -4 -l`
+3. Test with TCP: `proto tcp`
+
+## Best practices
+
+1. **Use dedicated user/group** instead of nobody
+2. **Enable persist-key and persist-tun** to maintain connection through restarts
+3. **Configure proper firewall rules** for security
+4. **Enable IP forwarding** via sysctl.conf
+5. **Use modern ciphers** (AES-256-GCM)
+6. **Monitor logs** for connection issues
+7. **Keep system updated** for security patches
+
+## Resources
+
+- **FreeBSD Handbook**: https://docs.freebsd.org/
+- **OpenBSD FAQ**: https://www.openbsd.org/faq/
+- **NetBSD Guide**: https://www.netbsd.org/docs/
+- **OpenVPN Community**: https://community.openvpn.net/

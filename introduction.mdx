@@ -1,0 +1,132 @@
+---
+title: OpenVPN - Secure IP tunnel daemon
+description: OpenVPN is a robust and highly flexible VPN daemon supporting SSL/TLS security, ethernet bridging, TCP or UDP tunnel transport, dynamic IP addresses, and portability to most major OS platforms.
+---
+
+# OpenVPN - Secure IP tunnel daemon
+
+OpenVPN is an open source VPN daemon that provides a secure tunneling solution for creating encrypted network connections. Built on OpenSSL, OpenVPN offers enterprise-grade security with the flexibility to work across diverse network environments.
+
+<CardGroup cols={2}>
+  <Card title="SSL/TLS security" icon="shield-check">
+    Industry-standard encryption using OpenSSL with support for client and server certificates
+  </Card>
+  <Card title="Flexible transport" icon="network-wired">
+    TCP or UDP tunnel transport through proxies or NAT with dynamic IP and DHCP support
+  </Card>
+  <Card title="Highly scalable" icon="users">
+    Scale from a single connection to hundreds or thousands of users with multi-client server support
+  </Card>
+  <Card title="Cross-platform" icon="laptop">
+    Native support for Linux, Windows, macOS, FreeBSD, OpenBSD, Solaris, and more
+  </Card>
+</CardGroup>
+
+## Key features
+
+OpenVPN is designed to work with the **TUN/TAP** virtual networking interface that exists on most platforms, providing:
+
+- **SSL/TLS mode**: Public key security using client and server certificates for production environments
+- **Static Key mode**: Conventional encryption using a pre-shared secret key for simple setups
+- **Ethernet bridging**: Bridge virtual network interfaces with physical ethernet adapters
+- **Lightweight footprint**: Many key features of IPSec without the heavyweight implementation
+- **Flexible configuration**: Options can be specified via command line or configuration files
+
+<Note>
+  OpenVPN is tightly bound to the OpenSSL library and derives much of its crypto capabilities from it.
+</Note>
+
+## Security modes
+
+OpenVPN supports multiple security configurations to match your deployment needs:
+
+<CardGroup cols={2}>
+  <Card title="SSL/TLS mode (Recommended)">
+    Uses public key infrastructure with separate certificates for each client and server. Ideal for production environments with multiple users.
+  </Card>
+  <Card title="Static Key mode">
+    Uses a pre-shared secret key for encryption. Suitable for simple point-to-point connections and testing.
+  </Card>
+</CardGroup>
+
+## Network topology options
+
+<Tabs>
+  <Tab title="Routed (TUN)">
+    Creates a routed IP tunnel using the TUN device. This is the most common configuration for site-to-site and remote access VPNs.
+    
+    ```bash
+    dev tun
+    topology subnet
+    server 10.8.0.0 255.255.255.0
+    ```
+  </Tab>
+  <Tab title="Bridged (TAP)">
+    Creates an ethernet tunnel using the TAP device. Allows VPN clients to appear on the same ethernet segment as the server.
+    
+    ```bash
+    dev tap
+    server-bridge 10.8.0.4 255.255.255.0 10.8.0.50 10.8.0.100
+    ```
+  </Tab>
+</Tabs>
+
+## Get started
+
+<CardGroup cols={3}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install OpenVPN from package managers or build from source
+  </Card>
+  <Card title="Quick start" icon="bolt" href="/quickstart">
+    Get a VPN connection up and running in minutes
+  </Card>
+  <Card title="Documentation" icon="book">
+    Read the complete manual at openvpn.net/man.html
+  </Card>
+</CardGroup>
+
+## Use cases
+
+OpenVPN is suitable for a wide range of VPN scenarios:
+
+- **Remote access VPN**: Allow remote users to securely connect to corporate networks
+- **Site-to-site VPN**: Connect multiple office locations over the internet
+- **Secure browsing**: Route all internet traffic through an encrypted tunnel
+- **Bypass restrictions**: Access geo-restricted content or bypass network filters
+- **IoT connectivity**: Securely connect IoT devices to cloud infrastructure
+
+<Info>
+  OpenVPN aims to offer many of the key features of IPSec but with a relatively lightweight footprint and easier configuration.
+</Info>
+
+## System requirements
+
+OpenVPN requires the following components:
+
+1. **TUN/TAP driver**: Virtual network device driver (included in most modern operating systems)
+2. **Crypto library**: OpenSSL 1.1.0+ or mbed TLS 2.0+ for encryption
+3. **Linux-specific** (optional):
+   - `libnl-gen` for kernel netlink support
+   - `libcap-ng` for Linux capability handling
+
+<Tip>
+  Optional compression libraries LZO and LZ4 can reduce bandwidth usage on slower connections.
+</Tip>
+
+## Community and support
+
+OpenVPN is developed and maintained by a global community:
+
+- **Official website**: [openvpn.net](https://openvpn.net/)
+- **Community wiki**: [community.openvpn.net/wiki](https://community.openvpn.net/openvpn/wiki)
+- **Issue tracker**: [github.com/OpenVPN/openvpn/issues](https://github.com/OpenVPN/openvpn/issues)
+- **Source code**: [github.com/OpenVPN/openvpn](https://github.com/OpenVPN/openvpn)
+- **FAQ**: [community.openvpn.net/openvpn/wiki/FAQ](https://community.openvpn.net/openvpn/wiki/FAQ)
+
+## License
+
+OpenVPN is free software licensed under the GNU General Public License version 2 (GPLv2). You can redistribute and modify it under the terms of this license.
+
+<Note>
+  Copyright (C) 2002-2025 OpenVPN Inc. Original author: James Yonan
+</Note>

@@ -1,0 +1,819 @@
+---
+title: Setting up OpenVPN servers
+description: Complete guide to configuring and deploying production-ready OpenVPN servers with multi-client support
+---
+
+## Overview
+
+OpenVPN server mode enables a single OpenVPN instance to handle multiple concurrent client connections. This guide covers everything from basic server setup to advanced features like client-specific configurations and VLAN tagging.
+
+<Note>
+OpenVPN server mode requires SSL/TLS authentication and can support hundreds or thousands of clients on sufficiently fast hardware.
+</Note>
+
+## Basic server configuration
+
+Here's a production-ready server configuration based on the OpenVPN 2.6 sample:
+
+```conf server.conf
+#################################################
+# Sample OpenVPN 2.6 config file for            #
+# multi-client server.                          #
+#################################################
+
+# Which TCP/UDP port should OpenVPN listen on?
+port 1194
+
+# TCP or UDP server?
+proto udp
+
+# "dev tun" will create a routed IP tunnel,
+# "dev tap" will create an ethernet tunnel.
+dev tun
+
+# SSL/TLS root certificate (ca), certificate
+# (cert), and private key (key).
+ca ca.crt
+cert server.crt
+key server.key  # This file should be kept secret
+
+# Network topology
+# Should be subnet (addressing via IP)
+topology subnet
+
+# Configure server mode and supply a VPN subnet
+# for OpenVPN to draw client addresses from.
+server 10.8.0.0 255.255.255.0
+
+# Maintain a record of client <-> virtual IP address
+# associations in this file.
+ifconfig-pool-persist ipp.txt
+
+# Push routes to the client to allow it
+# to reach other private subnets behind
+# the server.
+;push "route 192.168.10.0 255.255.255.0"
+;push "route 192.168.20.0 255.255.255.0"
+
+# Uncomment this directive to allow different
+# clients to be able to "see" each other.
+;client-to-client
+
+# The keepalive directive causes ping-like
+# messages to be sent back and forth over
+# the link so that each side knows when
+# the other side has gone down.
+keepalive 10 120
+
+# It's a good idea to reduce the OpenVPN
+# daemon's privileges after initialization.
+;user openvpn
+;group openvpn
+
+# The persist options will try to avoid
+# accessing certain resources on restart
+# that may no longer be accessible because
+# of the privilege downgrade.
+persist-tun
+
+# Output a short status file showing
+# current connections, truncated
+# and rewritten every minute.
+status openvpn-status.log
+
+# Set the appropriate level of log
+# file verbosity.
+verb 3
+
+# Notify the client that when the server restarts so it
+# can automatically reconnect.
+explicit-exit-notify 1
+```
+
+## Server setup process
+
+<Steps>
+  <Step title="Generate certificates and keys">
+    Use Easy-RSA or your PKI to generate:
+    - CA certificate (`ca.crt`)
+    - Server certificate (`server.crt`)
+    - Server private key (`server.key`)
+    - Diffie-Hellman parameters (`dh2048.pem`)
+    
+    ```bash
+    # Using Easy-RSA 3.x
+    ./easyrsa init-pki
+    ./easyrsa build-ca
+    ./easyrsa build-server-full server nopass
+    ./easyrsa gen-dh
+    ```
+  </Step>
+  
+  <Step title="Place files in the correct location">
+    ```bash
+    sudo mkdir -p /etc/openvpn/server
+    sudo cp ca.crt server.crt server.key dh2048.pem /etc/openvpn/server/
+    sudo chmod 600 /etc/openvpn/server/server.key
+    sudo chmod 644 /etc/openvpn/server/*.crt
+    ```
+  </Step>
+  
+  <Step title="Configure the server">
+    Create or edit `/etc/openvpn/server/server.conf` with your desired settings.
+  </Step>
+  
+  <Step title="Enable IP forwarding">
+    <Tabs>
+      <Tab title="Linux (permanent)">
+        ```bash
+        echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
+        sudo sysctl -p
+        ```
+      </Tab>
+      <Tab title="Linux (temporary)">
+        ```bash
+        sudo sysctl -w net.ipv4.ip_forward=1
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  
+  <Step title="Configure firewall">
+    <CodeGroup>
+    ```bash iptables
+    # Allow OpenVPN traffic
+    sudo iptables -A INPUT -p udp --dport 1194 -j ACCEPT
+    
+    # Enable NAT for VPN clients
+    sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+    
+    # Save rules
+    sudo iptables-save | sudo tee /etc/iptables/rules.v4
+    ```
+    
+    ```bash firewalld
+    sudo firewall-cmd --permanent --add-service=openvpn
+    sudo firewall-cmd --permanent --add-masquerade
+    sudo firewall-cmd --reload
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Start the server">
+    <Tabs>
+      <Tab title="systemd">
+        ```bash
+        sudo systemctl enable openvpn-server@server
+        sudo systemctl start openvpn-server@server
+        sudo systemctl status openvpn-server@server
+        ```
+      </Tab>
+      <Tab title="Manual">
+        ```bash
+        sudo openvpn --config /etc/openvpn/server/server.conf
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Server mode options
+
+### The --server directive
+
+The `--server` directive is a helper that simplifies server configuration:
+
+```conf
+# Simple form
+server 10.8.0.0 255.255.255.0
+
+# This automatically configures:
+# - mode server
+# - tls-server
+# - ifconfig-pool for client IPs
+# - route for the VPN subnet
+# - push topology and routes to clients
+```
+
+<Note>
+The server takes the `.1` address (10.8.0.1) as its VPN endpoint. Client IPs are allocated from the remaining addresses.
+</Note>
+
+### Prevent IP pool allocation
+
+```conf
+# Don't create dynamic IP pool (use only static assignments)
+server 10.8.0.0 255.255.255.0 nopool
+```
+
+### Network topology
+
+```conf
+# Recommended: subnet topology (more efficient)
+topology subnet
+
+# Legacy: net30 topology (for old Windows clients)
+# topology net30
+
+# Point-to-point topology
+# topology p2p
+```
+
+<Warning>
+The `net30` topology is deprecated and wastes IP addresses. Use `subnet` topology for new deployments.
+</Warning>
+
+## Client IP address management
+
+### Dynamic IP assignment
+
+Clients receive IPs from the configured pool:
+
+```conf
+# Basic pool configuration (automatic with --server)
+server 10.8.0.0 255.255.255.0
+
+# Persist client IP assignments across restarts
+ifconfig-pool-persist ipp.txt
+
+# Custom pool (without --server helper)
+ifconfig-pool 10.8.0.100 10.8.0.200
+```
+
+### Static IP assignment
+
+Assign specific IPs to clients using client config directory:
+
+<Steps>
+  <Step title="Enable client config directory">
+    ```conf server.conf
+    client-config-dir /etc/openvpn/ccd
+    ```
+  </Step>
+  
+  <Step title="Create client-specific config">
+    ```bash
+    sudo mkdir -p /etc/openvpn/ccd
+    sudo nano /etc/openvpn/ccd/client1
+    ```
+  </Step>
+  
+  <Step title="Configure static IP">
+    ```conf /etc/openvpn/ccd/client1
+    # Assign 10.8.0.100 to this client
+    ifconfig-push 10.8.0.100 255.255.255.0
+    ```
+  </Step>
+</Steps>
+
+<Note>
+The filename in `/etc/openvpn/ccd/` must exactly match the client's certificate Common Name (CN).
+</Note>
+
+### IPv6 support
+
+```conf
+# Enable IPv6 for the server
+server-ipv6 fd00:1234:5678::/64
+
+# Or configure manually
+ifconfig-ipv6 fd00:1234:5678::1/64 fd00:1234:5678::2
+ifconfig-ipv6-pool fd00:1234:5678::/64
+
+# Push IPv6 routes
+push "route-ipv6 fd00::/8"
+```
+
+## Routing configuration
+
+### Push routes to clients
+
+Make internal networks accessible to VPN clients:
+
+```conf
+# Push routes to private networks behind the server
+push "route 192.168.10.0 255.255.255.0"
+push "route 192.168.20.0 255.255.255.0"
+
+# Make VPN the default gateway for all traffic
+push "redirect-gateway def1 bypass-dhcp"
+
+# Push DNS servers
+push "dhcp-option DNS 8.8.8.8"
+push "dhcp-option DNS 8.8.4.4"
+```
+
+### Modern DNS configuration
+
+OpenVPN 2.6+ supports the `--dns` directive:
+
+```conf
+# Configure DNS server for clients
+push "dns server 0 address 8.8.8.8"
+push "dns server 0 address 8.8.4.4"
+
+# Configure search domains
+push "dns search-domains company.local"
+```
+
+### Internal routes (iroute)
+
+Route traffic for client subnets through specific clients:
+
+<Steps>
+  <Step title="Configure internal route">
+    ```conf /etc/openvpn/ccd/client1
+    # Client1 has subnet 192.168.40.0/24 behind it
+    iroute 192.168.40.0 255.255.255.0
+    ifconfig-push 10.8.0.100 255.255.255.0
+    ```
+  </Step>
+  
+  <Step title="Add system route">
+    ```conf server.conf
+    # Add route to the system routing table
+    route 192.168.40.0 255.255.255.0
+    ```
+  </Step>
+</Steps>
+
+<Note>
+You need both `--iroute` (OpenVPN internal) and `--route` (system routing table) for client-side subnets to work properly.
+</Note>
+
+## Client-to-client communication
+
+```conf
+# Allow clients to see each other
+client-to-client
+
+# With this enabled, clients can directly communicate
+# Otherwise, clients can only reach the server
+```
+
+<Warning>
+When using Data Channel Offload (DCO), `client-to-client` has no effect. Traffic is always routed through the system routing table.
+</Warning>
+
+## Security options
+
+### TLS authentication
+
+Add HMAC authentication for additional security:
+
+```bash
+# Generate TLS auth key
+openvpn --genkey secret ta.key
+```
+
+```conf
+# Enable TLS auth (server uses direction 0)
+tls-auth ta.key 0
+```
+
+### Certificate verification
+
+```conf
+# Require client certificates
+verify-client-cert require  # Default
+
+# Allow connections without client cert (username/password only)
+verify-client-cert none
+
+# Optional client cert
+verify-client-cert optional
+```
+
+### Username/password authentication
+
+```conf
+# Use script for password verification
+auth-user-pass-verify /etc/openvpn/auth.sh via-file
+script-security 2
+
+# Generate session tokens
+auth-gen-token 86400  # Token lifetime in seconds
+auth-gen-token-secret /etc/openvpn/auth-token.key
+```
+
+### Cipher configuration
+
+```conf
+# Modern ciphers (OpenVPN 2.4+)
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+# Support legacy clients (OpenVPN 2.3.x)
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC
+
+# TLS authentication digest
+auth SHA512
+```
+
+## Performance and scaling
+
+### Connection limits
+
+```conf
+# Limit concurrent clients
+max-clients 100
+
+# Limit routes per client (DoS protection)
+max-routes-per-client 256
+
+# Connection rate limiting
+connect-freq 10 60  # Max 10 new connections per 60 seconds
+
+# Initial connection rate limiting (UDP)
+connect-freq-initial 100 10  # Max 100 initial packets per 10 seconds
+```
+
+### Keepalive settings
+
+```conf
+# Ping every 10 seconds, assume down after 120 seconds
+keepalive 10 120
+
+# This is equivalent to:
+# ping 10
+# ping-restart 120
+```
+
+### Data Channel Offload (DCO)
+
+DCO improves performance by offloading data channel to the kernel:
+
+```conf
+# DCO is enabled by default in OpenVPN 2.6+
+# To disable:
+# disable-dco
+```
+
+### Multi-homed server
+
+```conf
+# Server with multiple IP addresses (UDP only)
+multihome
+
+# Force same interface for replies
+multihome same-interface
+```
+
+## Client-specific configurations
+
+### Client Config Directory (CCD)
+
+```conf server.conf
+# Enable per-client configuration
+client-config-dir /etc/openvpn/ccd
+
+# Require CCD file for all clients
+ccd-exclusive
+```
+
+Create per-client configs in `/etc/openvpn/ccd/`:
+
+<CodeGroup>
+```conf /etc/openvpn/ccd/john
+# Static IP for john
+ifconfig-push 10.8.0.10 255.255.255.0
+
+# Custom routes for john
+push "route 192.168.100.0 255.255.255.0"
+
+# John's internal subnet
+iroute 192.168.50.0 255.255.255.0
+```
+
+```conf /etc/openvpn/ccd/jane
+# Static IP for jane  
+ifconfig-push 10.8.0.11 255.255.255.0
+
+# Override global DNS for jane
+push-reset
+push "dns server 0 address 10.10.10.10"
+push "route 10.8.0.0 255.255.255.0"
+```
+</CodeGroup>
+
+### Push configuration options
+
+Available options that can be pushed to clients:
+
+```conf
+# Routes
+push "route 192.168.1.0 255.255.255.0"
+push "route-gateway 10.8.0.1"
+
+# DNS
+push "dhcp-option DNS 8.8.8.8"
+push "dns server 0 address 8.8.8.8"
+
+# Timeouts
+push "inactive 3600"
+push "ping 10"
+push "ping-restart 120"
+
+# Redirect gateway
+push "redirect-gateway def1 bypass-dhcp"
+
+# Compression (not recommended)
+# push "comp-lzo"
+```
+
+### Push filtering
+
+Remove or modify pushed options per client:
+
+```conf /etc/openvpn/ccd/limited-client
+# Remove all global push options
+push-reset
+
+# Add only specific routes
+push "route 10.8.0.0 255.255.255.0"
+
+# Or selectively remove options
+push-remove "redirect-gateway"
+push-remove "route 192.168.10"
+```
+
+## Ethernet bridging
+
+For Layer 2 VPN (TAP mode):
+
+```conf
+# Use TAP device
+dev tap
+
+# Configure bridging with DHCP
+server-bridge
+
+# Or specify IP pool
+server-bridge 10.8.0.4 255.255.255.0 10.8.0.100 10.8.0.200
+
+# Don't push gateway
+server-bridge nogw
+```
+
+<Steps>
+  <Step title="Create bridge interface">
+    ```bash
+    # Linux
+    sudo apt-get install bridge-utils
+    sudo brctl addbr br0
+    sudo brctl addif br0 eth0
+    sudo brctl addif br0 tap0
+    ```
+  </Step>
+  
+  <Step title="Configure bridge IP">
+    ```bash
+    sudo ip addr add 10.8.0.4/24 dev br0
+    sudo ip link set br0 up
+    ```
+  </Step>
+  
+  <Step title="Start OpenVPN">
+    OpenVPN will add tap0 to the bridge automatically if configured correctly.
+  </Step>
+</Steps>
+
+## Advanced features
+
+### VLAN tagging
+
+```conf
+# Enable VLAN support (TAP mode only)
+vlan-tagging
+
+# Configure VLAN acceptance
+vlan-accept all  # tagged, untagged, or all (default)
+
+# Server TAP VLAN ID
+vlan-pvid 1
+```
+
+Assign clients to VLANs:
+
+```conf /etc/openvpn/ccd/vlan10-client
+vlan-pvid 10
+```
+
+### Duplicate Common Names
+
+```conf
+# Allow multiple clients with same certificate
+duplicate-cn
+```
+
+<Warning>
+Only use `duplicate-cn` for testing. In production, each client should have a unique certificate.
+</Warning>
+
+### Learn address script
+
+```conf
+# Execute script when client connects/disconnects
+learn-address /etc/openvpn/learn-address.sh
+script-security 2
+```
+
+### Port sharing
+
+Share OpenVPN TCP port with HTTPS:
+
+```conf
+proto tcp
+port 443
+
+# Forward non-OpenVPN traffic to web server
+port-share localhost 8443
+```
+
+## Logging and monitoring
+
+### Status file
+
+```conf
+# Write status every 60 seconds
+status /var/log/openvpn-status.log 60
+
+# Status format version
+status-version 3  # Tab-separated for easy parsing
+```
+
+### Log configuration
+
+```conf
+# Verbosity (0=silent, 3=normal, 6=debug, 9=extremely verbose)
+verb 3
+
+# Suppress duplicate messages
+mute 20
+
+# Write to log file
+log /var/log/openvpn.log
+
+# Or append to existing log
+log-append /var/log/openvpn.log
+```
+
+### Management interface
+
+```conf
+# Enable management interface
+management localhost 7505
+
+# Or on Unix socket
+management /var/run/openvpn-mgmt.sock unix
+```
+
+Connect to management interface:
+
+```bash
+telnet localhost 7505
+# Then use commands: status, kill, etc.
+```
+
+## Complete example configurations
+
+### Production server (routed)
+
+```conf
+# OpenVPN 2.6 Production Server
+port 1194
+proto udp
+dev tun
+
+# Certificates
+ca /etc/openvpn/server/ca.crt
+cert /etc/openvpn/server/server.crt
+key /etc/openvpn/server/server.key
+dh /etc/openvpn/server/dh2048.pem
+
+# Network
+topology subnet
+server 10.8.0.0 255.255.255.0
+ifconfig-pool-persist /var/log/openvpn/ipp.txt
+
+# Routes
+push "route 192.168.1.0 255.255.255.0"
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 8.8.8.8"
+push "dhcp-option DNS 8.8.4.4"
+
+# Security
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+auth SHA512
+tls-auth /etc/openvpn/server/ta.key 0
+remote-cert-tls client
+
+# Client configs
+client-config-dir /etc/openvpn/ccd
+client-to-client
+
+# Connection
+keepalive 10 120
+max-clients 100
+connect-freq 10 60
+
+# Performance
+persist-tun
+persist-key
+
+# Privileges
+user openvpn
+group openvpn
+
+# Logging
+status /var/log/openvpn/status.log 60
+log-append /var/log/openvpn/openvpn.log
+verb 3
+mute 20
+
+# Notify clients on restart
+explicit-exit-notify 1
+```
+
+### High-security server
+
+```conf
+port 443
+proto tcp
+dev tun
+
+ca ca.crt
+cert server.crt  
+key server.key
+
+topology subnet
+server 10.8.0.0 255.255.255.0
+
+# Strong authentication
+auth-user-pass-verify /etc/openvpn/auth.sh via-file
+script-security 2
+verify-client-cert require
+auth-gen-token 43200
+auth-gen-token-secret /etc/openvpn/token.key
+
+# Strong ciphers only
+data-ciphers AES-256-GCM:CHACHA20-POLY1305
+tls-version-min 1.3
+auth SHA512
+tls-auth ta.key 0
+
+# Strict limits
+max-clients 50
+max-routes-per-client 100
+connect-freq 5 60
+
+# CCD required
+client-config-dir /etc/openvpn/ccd
+ccd-exclusive
+
+keepalive 10 120
+persist-tun
+
+user openvpn
+group openvpn
+
+status /var/log/openvpn-status.log 30
+log-append /var/log/openvpn.log  
+verb 3
+```
+
+## Troubleshooting
+
+### Enable detailed logging
+
+```conf
+verb 6  # Debug level
+log /var/log/openvpn-debug.log
+```
+
+### Check server status
+
+```bash
+# View status file
+cat /var/log/openvpn-status.log
+
+# Check connected clients
+sudo systemctl status openvpn-server@server
+
+# View logs
+sudo journalctl -u openvpn-server@server -f
+```
+
+### Common issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Clients can't connect | Firewall blocking | Check firewall rules and port forwarding |
+| No internet through VPN | NAT not configured | Enable IP forwarding and configure NAT |
+| Clients can't see each other | client-to-client disabled | Enable `client-to-client` |
+| "TLS handshake failed" | Certificate issues | Verify all certificates are valid and match |
+
+## Next steps
+
+- [Client setup guide](/configuration/client-setup) - Configure OpenVPN clients
+- [Options reference](/configuration/options-reference) - Complete configuration options
+- [Configuration overview](/configuration/overview) - File format and structure

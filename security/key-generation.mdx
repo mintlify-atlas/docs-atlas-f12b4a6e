@@ -1,0 +1,513 @@
+---
+title: Generating keys and secrets
+description: Generate various types of cryptographic keys and secrets for OpenVPN including shared secrets, TLS keys, and authentication tokens
+---
+
+## Overview
+
+OpenVPN requires various types of cryptographic keys and secrets for secure operation. This guide covers generating all types of keys using the `--genkey` command and other cryptographic tools.
+
+## The genkey command
+
+The `--genkey` command generates cryptographic keys for OpenVPN in standalone mode.
+
+### Syntax
+
+```bash
+openvpn --genkey keytype keyfile
+```
+
+If `keyfile` is omitted or empty, the key will be output to stdout.
+
+### Available key types
+
+| Key Type | Description | Usage |
+|----------|-------------|-------|
+| `secret` | Standard shared secret key | Static key mode, tls-auth, tls-crypt |
+| `tls-auth` | Alias for secret | TLS authentication |
+| `tls-crypt` | Alias for secret | TLS encryption and authentication |
+| `tls-crypt-v2-server` | Server key for TLS crypt v2 | Large deployments with per-client keys |
+| `tls-crypt-v2-client` | Client key for TLS crypt v2 | Generated per client |
+| `auth-token` | Authentication token key | Token-based authentication |
+
+## Shared secret keys
+
+Shared secret keys are used for static key mode, `--tls-auth`, and `--tls-crypt`.
+
+### Generating shared secrets
+
+<CodeGroup>
+```bash Basic
+# Generate a shared secret
+openvpn --genkey secret shared.key
+```
+
+```bash TLS-Auth
+# Generate for tls-auth (identical to secret)
+openvpn --genkey tls-auth ta.key
+```
+
+```bash TLS-Crypt
+# Generate for tls-crypt (identical to secret)
+openvpn --genkey tls-crypt tc.key
+```
+
+```bash To stdout
+# Output to stdout (for piping or viewing)
+openvpn --genkey secret
+```
+</CodeGroup>
+
+### Key format
+
+Shared secret keys are 2048 bits (256 bytes) and stored in PEM-like format:
+
+```
+#
+# 2048 bit OpenVPN static key
+#
+-----BEGIN OpenVPN Static key V1-----
+e3b0c44298fc1c149afbf4c8996fb924
+27ae41e4649b934ca495991b7852b855
+...
+-----END OpenVPN Static key V1-----
+```
+
+### Distributing shared secrets
+
+<Warning>
+Shared secret keys must be distributed over a secure channel (e.g., SSH, encrypted email, physical media). Never transmit unencrypted over the network.
+</Warning>
+
+```bash
+# Securely copy to remote host
+scp shared.key user@remote-host:/etc/openvpn/
+
+# Or use ssh to pipe directly
+openvpn --genkey secret | ssh user@remote-host 'cat > /etc/openvpn/shared.key'
+```
+
+## TLS authentication keys
+
+### Generating tls-auth keys
+
+<Steps>
+  <Step title="Generate the key">
+    ```bash
+    openvpn --genkey tls-auth ta.key
+    ```
+  </Step>
+  
+  <Step title="Configure server">
+    ```bash
+    # Server configuration
+    tls-auth ta.key 0
+    ```
+  </Step>
+  
+  <Step title="Configure clients">
+    ```bash
+    # Client configuration (note opposite direction)
+    tls-auth ta.key 1
+    ```
+  </Step>
+  
+  <Step title="Distribute key securely">
+    ```bash
+    # Copy to clients securely
+    scp ta.key user@client:/etc/openvpn/
+    ```
+  </Step>
+</Steps>
+
+<Note>
+The direction parameter (0 or 1) uses different parts of the 2048-bit key for send and receive operations, allowing bidirectional communication with different HMAC keys.
+</Note>
+
+### Generating tls-crypt keys
+
+```bash
+# Generate tls-crypt key
+openvpn --genkey tls-crypt tc.key
+
+# Both server and client use same configuration
+# Server config:
+tls-crypt tc.key
+
+# Client config:
+tls-crypt tc.key
+```
+
+**Advantages:**
+- No direction parameter needed
+- Control channel packets are encrypted
+- Provides privacy and post-quantum security
+
+## TLS crypt v2 keys
+
+TLS crypt v2 provides client-specific keys for improved security in large deployments.
+
+### Generating tls-crypt-v2 server key
+
+<Steps>
+  <Step title="Generate server key">
+    ```bash
+    openvpn --genkey tls-crypt-v2-server v2server.key
+    ```
+    
+    This creates a 2048-bit key containing:
+    - First 256 bits of key 1: AES-256-CTR encryption key
+    - First 256 bits of key 2: HMAC-SHA-256 authentication key
+  </Step>
+  
+  <Step title="Configure server">
+    ```bash
+    # Basic configuration
+    tls-crypt-v2 v2server.key
+    
+    # Or force modern cookie-based handshake (OpenVPN 2.6+)
+    tls-crypt-v2 v2server.key force-cookie
+    ```
+  </Step>
+  
+  <Step title="Secure the key">
+    ```bash
+    chmod 600 v2server.key
+    chown root:root v2server.key
+    ```
+  </Step>
+</Steps>
+
+### Generating tls-crypt-v2 client keys
+
+Client keys are generated using the server key:
+
+<Steps>
+  <Step title="Generate client key with default metadata">
+    ```bash
+    openvpn --tls-crypt-v2 v2server.key --genkey tls-crypt-v2-client v2client-1.key
+    ```
+    
+    By default, OpenVPN uses a 64-bit Unix timestamp (key generation time) as metadata.
+  </Step>
+  
+  <Step title="Generate client key with custom metadata">
+    ```bash
+    # Metadata must be base64-encoded, max 733 bytes (980 base64 characters)
+    # Example: encoding "user=john,serial=12345"
+    echo -n "user=john,serial=12345" | base64
+    # Output: dXNlcj1qb2huLHNlcmlhbD0xMjM0NQ==
+    
+    openvpn --tls-crypt-v2 v2server.key --genkey tls-crypt-v2-client v2client-1.key "dXNlcj1qb2huLHNlcmlhbD0xMjM0NQ=="
+    ```
+  </Step>
+  
+  <Step title="Configure client">
+    ```bash
+    # Client configuration
+    tls-crypt-v2 v2client-1.key
+    ```
+  </Step>
+</Steps>
+
+### Metadata types
+
+The first byte of metadata determines its type:
+
+| Type | Value | Description |
+|------|-------|-------------|
+| USER | 0x00 | User-defined free-form data |
+| TIMESTAMP | 0x01 | 64-bit network order Unix timestamp |
+
+### Automated client key generation
+
+```bash
+#!/bin/bash
+# Generate client keys for multiple users
+
+SERVER_KEY="v2server.key"
+OUTPUT_DIR="./client-keys"
+
+mkdir -p $OUTPUT_DIR
+
+for client in alice bob charlie; do
+    # Generate metadata with username and timestamp
+    metadata=$(echo -n "user=$client,created=$(date +%s)" | base64)
+    
+    # Generate client key
+    openvpn --tls-crypt-v2 $SERVER_KEY \
+        --genkey tls-crypt-v2-client \
+        $OUTPUT_DIR/${client}.key \
+        "$metadata"
+    
+    echo "Generated key for $client"
+done
+```
+
+### Verifying client metadata
+
+```bash
+# Server configuration with metadata verification
+tls-crypt-v2-verify /etc/openvpn/verify-metadata.sh
+
+# Set maximum age for client keys (365 days)
+tls-crypt-v2-max-age 365
+```
+
+Example verification script:
+
+```bash
+#!/bin/bash
+# /etc/openvpn/verify-metadata.sh
+
+# Environment variables available:
+# - script_type: "tls-crypt-v2-verify"
+# - metadata_type: "0" (user) or "1" (timestamp)
+# - metadata_file: path to file containing metadata
+
+if [ "$metadata_type" = "0" ]; then
+    # User-defined metadata
+    metadata=$(cat "$metadata_file")
+    # Parse and verify metadata
+    # Exit 0 to accept, non-zero to reject
+elif [ "$metadata_type" = "1" ]; then
+    # Timestamp metadata (already checked by --tls-crypt-v2-max-age)
+    exit 0
+fi
+
+exit 1
+```
+
+## Authentication token keys
+
+Authentication tokens allow clients to reconnect without re-authenticating.
+
+### Generating auth token keys
+
+```bash
+# Generate to file
+openvpn --genkey auth-token auth-token.key
+
+# Generate to stdout
+openvpn --genkey auth-token
+```
+
+### Using auth token keys
+
+```bash
+# Server configuration
+auth-gen-token-secret auth-token.key
+```
+
+<Warning>
+This file should be kept secret to the server. Anyone with access to this file can generate valid authentication tokens that the OpenVPN server will accept.
+</Warning>
+
+## Hardware-accelerated key generation
+
+### Viewing available crypto engines
+
+```bash
+# Show hardware crypto acceleration engines
+openvpn --show-engines
+```
+
+### Using hardware acceleration
+
+```bash
+# Use specific engine for key generation
+engine rdrand  # Use CPU's RDRAND instruction
+```
+
+## Key file security
+
+### File permissions
+
+```bash
+# Private keys and secrets should be readable only by root
+chmod 600 /etc/openvpn/*.key
+chown root:root /etc/openvpn/*.key
+
+# Certificates can be world-readable
+chmod 644 /etc/openvpn/*.crt
+```
+
+### Secure storage
+
+<Steps>
+  <Step title="Encrypt private keys">
+    ```bash
+    # Encrypt key file with password
+    openssl enc -aes-256-cbc -salt -in server.key -out server.key.enc
+    
+    # Decrypt when needed
+    openssl enc -d -aes-256-cbc -in server.key.enc -out server.key
+    ```
+  </Step>
+  
+  <Step title="Use secure deletion">
+    ```bash
+    # Securely delete old keys
+    shred -vfz -n 10 old-key.key
+    ```
+  </Step>
+  
+  <Step title="Backup securely">
+    ```bash
+    # Create encrypted backup
+    tar czf - /etc/openvpn/*.key | openssl enc -aes-256-cbc -out openvpn-keys.tar.gz.enc
+    ```
+  </Step>
+</Steps>
+
+## Key rotation
+
+### Rotating tls-auth/tls-crypt keys
+
+<Steps>
+  <Step title="Generate new key">
+    ```bash
+    openvpn --genkey tls-crypt tc-new.key
+    ```
+  </Step>
+  
+  <Step title="Configure dual keys temporarily">
+    ```bash
+    # Server supports both old and new keys during transition
+    tls-crypt tc-old.key
+    # Note: Full dual-key support requires configuration management
+    ```
+  </Step>
+  
+  <Step title="Update clients gradually">
+    Distribute new key to clients and update their configurations.
+  </Step>
+  
+  <Step title="Remove old key">
+    Once all clients are updated, remove old key from server configuration.
+  </Step>
+</Steps>
+
+### Rotating tls-crypt-v2 keys
+
+With tls-crypt-v2, each client has unique keys:
+
+```bash
+# Generate new server key
+openvpn --genkey tls-crypt-v2-server v2server-new.key
+
+# Generate new client keys
+for client in client1 client2 client3; do
+    openvpn --tls-crypt-v2 v2server-new.key \
+        --genkey tls-crypt-v2-client ${client}-new.key
+done
+```
+
+## Key derivation and format
+
+### Static key format
+
+Static keys use the following structure:
+
+```
+Struct key {
+    uint8_t cipher[MAX_CIPHER_KEY_LENGTH];  // Cipher key material
+    uint8_t hmac[MAX_HMAC_KEY_LENGTH];      // HMAC key material
+};
+```
+
+For bidirectional keys:
+```
+Struct key2 {
+    struct key keys[2];  // keys[0]: client->server, keys[1]: server->client
+};
+```
+
+### Key direction
+
+| Direction | Encrypt Key | Decrypt Key |
+|-----------|-------------|-------------|
+| Bidirectional (none) | keys[0] | keys[0] |
+| Normal (0) | keys[0] | keys[1] |
+| Inverse (1) | keys[1] | keys[0] |
+
+## Best practices
+
+1. **Use cryptographically secure random sources** - OpenVPN uses the system's random number generator
+
+2. **Generate keys on secure systems** - Generate keys on trusted, offline systems when possible
+
+3. **Never reuse keys** - Generate unique keys for each purpose and deployment
+
+4. **Secure distribution** - Always use secure channels (SSH, encrypted email, physical media)
+
+5. **Regular rotation** - Rotate shared keys periodically, especially tls-crypt in large deployments
+
+6. **Use tls-crypt-v2 for scale** - Large deployments should use per-client keys
+
+7. **Set proper permissions** - Restrict access to key files (mode 600)
+
+8. **Backup securely** - Encrypt backups of key material
+
+9. **Document key usage** - Maintain inventory of which keys are used where
+
+10. **Monitor key age** - Implement alerting for keys that need rotation
+
+## Troubleshooting
+
+### Insufficient entropy
+
+```bash
+# Check available entropy
+cat /proc/sys/kernel/random/entropy_avail
+
+# Install entropy daemon if needed
+apt-get install haveged
+systemctl enable haveged
+systemctl start haveged
+```
+
+### Key format errors
+
+**Error: "Cannot load inline file"**
+- Check PEM format headers and footers
+- Ensure no extra whitespace or characters
+- Verify base64 encoding is valid
+
+**Error: "Bad key direction"**
+- Ensure direction parameter matches between peers
+- Use 0 on one side, 1 on the other
+- Or omit direction on both sides
+
+### Verifying key integrity
+
+```bash
+# Check key file integrity
+head -1 shared.key  # Should show "-----BEGIN OpenVPN Static key V1-----"
+tail -1 shared.key  # Should show "-----END OpenVPN Static key V1-----"
+
+# Count lines (should be consistent)
+wc -l shared.key
+```
+
+## Advanced key generation
+
+### Using custom random sources
+
+```bash
+# Use hardware random number generator
+openvpn --genkey secret | cat /dev/hwrng > custom.key
+```
+
+### Generating test keys
+
+```bash
+# Generate ephemeral keys for testing
+openvpn --genkey secret /tmp/test.key
+
+# Test configuration
+openvpn --config test.conf --secret /tmp/test.key
+
+# Clean up
+shred -vfz -n 3 /tmp/test.key
+```

@@ -1,0 +1,167 @@
+---
+title: Contributing to OpenVPN
+description: Learn how to contribute patches, code, and improvements to the OpenVPN project
+---
+
+Contributions to OpenVPN are welcome and encouraged. This guide explains the process for submitting patches and contributing to the project.
+
+## Before you start
+
+<Info>
+  All patches should be written against the Git "master" branch. Some patches may be backported to release branches after review.
+</Info>
+
+Make sure you:
+- Have read the [code style guidelines](/community/code-style)
+- Are familiar with Git and the patch submission process
+- Have tested your changes thoroughly
+- Follow the project's coding standards
+
+## Contribution workflow
+
+<Steps>
+  <Step title="Write your patch">
+    Create your changes against the latest master branch. Split large patches into small, atomic commits to make reviews easier.
+  </Step>
+  
+  <Step title="Format your code">
+    Ensure your code follows the project's formatting guidelines using clang-format. See the [code style guide](/community/code-style) for details.
+  </Step>
+  
+  <Step title="Get feedback (optional)">
+    For quick feedback before formal submission, visit the #openvpn-devel channel on irc.libera.chat.
+  </Step>
+  
+  <Step title="Submit your patch">
+    Submit your patch via one of the accepted methods: mailing list, Gerrit, or GitHub PR for review.
+  </Step>
+  
+  <Step title="Address review feedback">
+    Respond to reviewer comments and update your patch as needed.
+  </Step>
+  
+  <Step title="Final submission">
+    After ACK (acceptance), patches must be sent to the openvpn-devel mailing list for final merge.
+  </Step>
+</Steps>
+
+## Submission methods
+
+### Mailing list (preferred)
+
+The preferred method is to send patches directly to the openvpn-devel mailing list:
+
+**Subscribe to the list:**
+[https://lists.sourceforge.net/lists/listinfo/openvpn-devel](https://lists.sourceforge.net/lists/listinfo/openvpn-devel)
+
+**Subject line format:**
+Prefix your subject line with `[PATCH]`
+
+**Sending patches:**
+
+Use `git-format-patch` or `git-send-email` to generate and send patches:
+
+```bash
+# Send your latest commit to the mailing list
+git send-email --to=openvpn-devel@lists.sourceforge.net HEAD~1
+```
+
+<Note>
+  To avoid merging issues, always use git-format-patch or git-send-email instead of manually creating patches.
+</Note>
+
+### Gerrit code review
+
+You can also submit patches through the OpenVPN Gerrit instance:
+
+1. Create an account at [https://gerrit.openvpn.net/](https://gerrit.openvpn.net/)
+2. Follow the [Gerrit best practices guide](https://community.openvpn.net/Development/GerritBestPractices)
+3. Submit your changes for review
+
+### GitHub pull requests
+
+<Info>
+  GitHub PRs are accepted for code review and discussion only. After ACK, patches must still be sent to the openvpn-devel mailing list for final merge.
+</Info>
+
+GitHub pull requests workflow:
+
+1. Fork the repository on GitHub
+2. Create a feature branch
+3. Make your changes and commit
+4. Open a pull request for review
+5. After the patch is ACKed, send it to the mailing list (you or a reviewer can do this)
+
+## Patch guidelines
+
+### Keep patches atomic
+
+Break large changes into small, logical commits:
+- Each commit should represent one logical change
+- Commits should be self-contained and buildable
+- Write clear commit messages explaining the "why"
+
+### Commit message format
+
+Write clear commit messages that explain:
+- What the change does
+- Why the change is necessary
+- Any relevant context or background
+
+### Code formatting
+
+All code must follow the OpenVPN code style guidelines:
+- Use the provided `.clang-format` configuration
+- Run clang-format before submitting
+- Install the pre-commit hook for automatic formatting
+
+See the [code style guide](/community/code-style) for detailed formatting requirements.
+
+### Testing
+
+Ensure your changes:
+- Build successfully on supported platforms
+- Don't break existing functionality
+- Include tests for new features when applicable
+- Are tested in realistic scenarios
+
+## Quick feedback
+
+If you want quick feedback on a patch before sending it to the mailing list:
+
+**IRC:** Join #openvpn-devel on irc.libera.chat
+
+<Note>
+  You must be logged in to Libera to join the channel. See the [registration guide](https://libera.chat/guides/registration).
+</Note>
+
+## Related projects
+
+The contribution process for other OpenVPN projects may differ:
+
+- **openvpn-build** - Windows installers and Debian packages
+- **openvpn-gui** - Windows GUI
+- **tap-windows6** - Windows TAP adapter
+- **easy-rsa** - Certificate management utility
+
+Refer to each project's specific contribution guidelines.
+
+## Additional resources
+
+<CardGroup cols={2}>
+  <Card title="Developer documentation" icon="book" href="https://community.openvpn.net/Development/DeveloperDocumentation">
+    Comprehensive developer guides and technical documentation
+  </Card>
+  
+  <Card title="Contributing wiki" icon="edit" href="https://community.openvpn.net/openvpn/wiki/Contributing">
+    Detailed contribution instructions and workflows
+  </Card>
+  
+  <Card title="Code style" icon="code" href="/community/code-style">
+    Code formatting and style guidelines
+  </Card>
+  
+  <Card title="Community overview" icon="users" href="/community/overview">
+    Connect with the OpenVPN community
+  </Card>
+</CardGroup>

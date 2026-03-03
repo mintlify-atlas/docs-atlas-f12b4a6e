@@ -1,0 +1,361 @@
+---
+title: Generic options
+description: Generic command line options accessible regardless of which mode OpenVPN is configured in
+---
+
+This section covers generic options which are accessible regardless of which mode OpenVPN is configured as.
+
+## Basic options
+
+<ParamField path="--help" type="flag">
+  Show options.
+  
+  ```bash
+  openvpn --help
+  ```
+</ParamField>
+
+<ParamField path="--config" type="string">
+  Load additional config options from `file` where each line corresponds to one command line option, but with the leading `--` removed.
+  
+  If `--config file` is the only option to the openvpn command, the `--config` can be removed, and the command can be given as `openvpn file`.
+  
+  <Note>Configuration files can be nested to a reasonable depth.</Note>
+  
+  ```bash
+  openvpn --config /etc/openvpn/server.conf
+  # Or simply:
+  openvpn /etc/openvpn/server.conf
+  ```
+</ParamField>
+
+<ParamField path="--cd" type="string">
+  Change directory to `dir` prior to reading any files such as configuration files, key files, scripts, etc. `dir` should be an absolute path, with a leading "/", and without any references to the current directory such as `.` or `..`.
+  
+  This option is useful when you are running OpenVPN in `--daemon` mode, and you want to consolidate all of your OpenVPN control files in one location.
+  
+  ```bash
+  openvpn --cd /etc/openvpn --config server.conf
+  ```
+</ParamField>
+
+## Authentication and security
+
+<ParamField path="--auth-nocache" type="flag">
+  Don't cache `--askpass` or `--auth-user-pass` username/passwords in virtual memory.
+  
+  If specified, this directive will cause OpenVPN to immediately forget username/password inputs after they are used. As a result, when OpenVPN needs a username/password, it will prompt for input from stdin, which may be multiple times during the duration of an OpenVPN session.
+  
+  <Note>
+  When using `--auth-nocache` in combination with a user/password file and `--chroot` or `--daemon`, make sure to use an absolute path.
+  </Note>
+  
+  ```bash
+  openvpn --auth-nocache --auth-user-pass
+  ```
+</ParamField>
+
+<ParamField path="--script-security" type="integer">
+  This directive offers policy-level control over OpenVPN's usage of external programs and scripts. Lower `level` values are more restrictive, higher values are more permissive.
+  
+  **Default:** `1`
+  
+  Settings for `level`:
+  
+  - **0** - Strictly no calling of external programs
+  - **1** - (Default) Only call built-in executables such as ifconfig, ip, route, or netsh
+  - **2** - Allow calling of built-in executables and user-defined scripts
+  - **3** - Allow passwords to be passed to scripts via environmental variables (potentially unsafe)
+  
+  <Note>
+  Some directives such as `--up` allow options to be passed to the external script. Make sure the script name does not contain any spaces or the configuration parser will choke.
+  </Note>
+  
+  ```bash
+  openvpn --script-security 2 --up /etc/openvpn/up.sh
+  ```
+</ParamField>
+
+## Process control
+
+<ParamField path="--daemon" type="string" optional>
+  Become a daemon after all initialization functions are completed.
+  
+  This option will cause all message and error output to be sent to the syslog file (such as `/var/log/messages`), except for the output of scripts and ifconfig commands, which will go to `/dev/null` unless otherwise redirected.
+  
+  The optional `progname` parameter will cause OpenVPN to report its program name to the system logger as `progname`. When unspecified, `progname` defaults to `openvpn`.
+  
+  ```bash
+  # Basic daemon mode
+  openvpn --daemon --config server.conf
+  
+  # With custom program name
+  openvpn --daemon vpn-server --config server.conf
+  ```
+  
+  <Note>
+  As soon as OpenVPN has daemonized, it can not ask for usernames, passwords, or key pass phrases anymore. Using a password-protected private key will fail unless the `--askpass` option is used.
+  </Note>
+</ParamField>
+
+<ParamField path="--user" type="string">
+  Change the user ID of the OpenVPN process to `user` after initialization, dropping privileges in the process.
+  
+  This option is useful to protect the system in the event that some hostile party was able to gain control of an OpenVPN session. By setting `user` to an unprivileged user dedicated to run openvpn, the hostile party would be limited in what damage they could cause.
+  
+  <Note>
+  Previous versions of openvpn used `nobody` as the example unprivileged user. It is not recommended to actually use that user since it is usually used by other system services already. Always create a dedicated user for openvpn.
+  </Note>
+  
+  ```bash
+  openvpn --user openvpn --group openvpn --daemon
+  ```
+</ParamField>
+
+<ParamField path="--group" type="string">
+  Similar to the `--user` option, this option changes the group ID of the OpenVPN process to `group` after initialization.
+  
+  ```bash
+  openvpn --user openvpn --group openvpn
+  ```
+</ParamField>
+
+<ParamField path="--chroot" type="string">
+  Chroot to `dir` after initialization. `--chroot` essentially redefines `dir` as being the top level directory tree (/). OpenVPN will therefore be unable to access any files outside this tree. This can be desirable from a security standpoint.
+  
+  Since the chroot operation is delayed until after initialization, most OpenVPN options that reference files will operate in a pre-chroot context.
+  
+  <Note>
+  The SSL library will probably need /dev/urandom to be available inside the chroot directory `dir`. This is because SSL libraries occasionally need to collect fresh randomness. Newer linux kernels and some BSDs implement a getrandom() or getentropy() syscall that removes the need for /dev/urandom to be available.
+  </Note>
+  
+  ```bash
+  openvpn --chroot /var/empty --user openvpn --group openvpn
+  ```
+</ParamField>
+
+<ParamField path="--setcon" type="string">
+  Apply SELinux `context` after initialization. This essentially provides the ability to restrict OpenVPN's rights to only network I/O operations, thanks to SELinux.
+  
+  This goes further than `--user` and `--chroot` in that those two, while being great security features, unfortunately do not protect against privilege escalation by exploitation of a vulnerable system call.
+  
+  <Note>
+  Since setcon requires access to /proc you will have to provide it inside the chroot directory (e.g. with mount --bind).
+  </Note>
+  
+  ```bash
+  openvpn --setcon system_u:system_r:openvpn_t:s0
+  ```
+</ParamField>
+
+<ParamField path="--nice" type="integer">
+  Change process priority after initialization (`n` greater than 0 is lower priority, `n` less than zero is higher priority).
+  
+  ```bash
+  openvpn --nice 5
+  ```
+</ParamField>
+
+<ParamField path="--writepid" type="string">
+  Write OpenVPN's main process ID to `file`.
+  
+  ```bash
+  openvpn --writepid /var/run/openvpn.pid
+  ```
+</ParamField>
+
+## Memory and resource management
+
+<ParamField path="--mlock" type="flag">
+  Disable paging by calling the POSIX mlockall function. Requires that OpenVPN be initially run as root (though OpenVPN can subsequently downgrade its UID using the `--user` option).
+  
+  Using this option ensures that key material and tunnel data are never written to disk due to virtual memory paging operations which occur under most modern operating systems.
+  
+  <Note>
+  The downside of using `--mlock` is that it will reduce the amount of physical memory available to other applications.
+  </Note>
+  
+  The limit on how much memory can be locked and how that limit is enforced are OS-dependent. On Linux the default limit that an unprivileged process may lock (RLIMIT_MEMLOCK) is low. The limit can be increased using ulimit or systemd directives depending on how OpenVPN is started.
+  
+  ```bash
+  openvpn --mlock
+  ```
+</ParamField>
+
+<ParamField path="--tmp-dir" type="string">
+  Specify a directory `dir` for temporary files instead of the default `TMPDIR` (or "/tmp" if unset). Note that it must be writable by the main process after it has dropped root privileges.
+  
+  This directory will be used to communicate with scripts and plugins for client-connect and auth-user-pass-verify operations.
+  
+  ```bash
+  openvpn --tmp-dir /var/tmp/openvpn
+  ```
+</ParamField>
+
+## Status and monitoring
+
+<ParamField path="--status" type="string">
+  Write operational status to `file` every `n` seconds.
+  
+  **Default interval:** `60` seconds
+  
+  Status can also be written to the syslog by sending a `SIGUSR2` signal.
+  
+  With multi-client capability enabled on a server, the status file includes a list of clients and a routing table. The output format can be controlled by the `--status-version` option in that case.
+  
+  ```bash
+  # Write status every 60 seconds (default)
+  openvpn --status /var/log/openvpn-status.log
+  
+  # Write status every 10 seconds
+  openvpn --status /var/log/openvpn-status.log 10
+  ```
+</ParamField>
+
+<ParamField path="--status-version" type="integer">
+  Set the status file format version number to `n`.
+  
+  This only affects the status file on servers with multi-client capability enabled. Valid status version values:
+  
+  - **1** - Traditional format (default). The client list contains the following fields comma-separated: Common Name, Real Address, Bytes Received, Bytes Sent, Connected Since.
+  - **2** - A more reliable format for external processing. Compared to version 1, the client list contains additional fields: Virtual Address, Virtual IPv6 Address, Username, Client ID, Peer ID, Data Channel Cipher.
+  - **3** - Identical to 2, but fields are tab-separated.
+  
+  ```bash
+  openvpn --status /var/log/openvpn-status.log --status-version 2
+  ```
+</ParamField>
+
+## Compatibility and feature control
+
+<ParamField path="--compat-mode" type="string">
+  This option provides a convenient way to alter the defaults of OpenVPN to be more compatible with the version `version` specified.
+  
+  <Note>
+  Using this option reverts defaults to no longer recommended values and should be avoided if possible.
+  </Note>
+  
+  The following table details what defaults are changed depending on the version specified:
+  
+  - **2.5.x or lower:** `--allow-compression asym` is automatically added to the configuration if no other compression options are present.
+  - **2.4.x or lower:** The cipher in `--cipher` is appended to `--data-ciphers`.
+  - **2.3.x or lower:** `--data-ciphers-fallback` is automatically added with the same cipher as `--cipher`.
+  - **2.3.6 or lower:** `--tls-version-min 1.0` is added to the configuration when `--tls-version-min` is not explicitly set.
+  
+  ```bash
+  openvpn --compat-mode 2.4.0
+  ```
+</ParamField>
+
+<ParamField path="--disable-dco" type="flag">
+  Disable "data channel offload" (DCO).
+  
+  On Linux don't use the ovpn-dco device driver, but rather rely on the legacy tun module.
+  
+  You may want to use this option if your server needs to allow clients older than version 2.4 to connect.
+  
+  ```bash
+  openvpn --disable-dco
+  ```
+</ParamField>
+
+<ParamField path="--disable-occ" type="flag">
+  **DEPRECATED** Disable "options consistency check" (OCC) in configurations that do not use TLS.
+  
+  Don't output a warning message if option inconsistencies are detected between peers. An example of an option inconsistency would be where one peer uses `--dev tun` while the other peer uses `--dev tap`.
+  
+  <Note>
+  Use of this option is discouraged, but is provided as a temporary fix in situations where a recent version of OpenVPN must connect to an old version.
+  </Note>
+  
+  ```bash
+  openvpn --disable-occ
+  ```
+</ParamField>
+
+## Advanced options
+
+<ParamField path="--engine" type="string" optional>
+  Enable OpenSSL hardware-based crypto engine functionality.
+  
+  If `engine-name` is specified, use a specific crypto engine. Use the `--show-engines` standalone option to list the crypto engines which are supported by OpenSSL.
+  
+  ```bash
+  # Enable default engine
+  openvpn --engine
+  
+  # Use specific engine
+  openvpn --engine aesni
+  ```
+</ParamField>
+
+<ParamField path="--providers" type="string">
+  Load the list of (OpenSSL) providers. This is mainly useful for using an external provider for key management like tpm2-openssl or to load the legacy provider.
+  
+  <Note>
+  Behaviour of changing this option between `SIGHUP` might not be well behaving. If you need to change/add/remove this option, fully restart OpenVPN.
+  </Note>
+  
+  ```bash
+  openvpn --providers legacy default
+  ```
+</ParamField>
+
+<ParamField path="--ignore-unknown-option" type="string">
+  When one of options `opt1 ... optN` is encountered in the configuration file, the configuration file parsing does not fail if this OpenVPN version does not support the option.
+  
+  Multiple `--ignore-unknown-option` options can be given to support a larger number of options to ignore.
+  
+  <Note>
+  This option should be used with caution, as there are good security reasons for having OpenVPN fail if it detects problems in a config file.
+  </Note>
+  
+  Available since OpenVPN 2.3.3.
+  
+  ```bash
+  openvpn --ignore-unknown-option opt1 opt2 opt3
+  ```
+</ParamField>
+
+<ParamField path="--iproute" type="string">
+  Set alternate command to execute instead of default `iproute2` command. May be used in order to execute OpenVPN in unprivileged environment.
+  
+  ```bash
+  openvpn --iproute /usr/local/bin/ip
+  ```
+</ParamField>
+
+<ParamField path="--keying-material-exporter" type="string">
+  Save Exported Keying Material [RFC5705] of `len` bytes (must be between 16 and 4095 bytes) using `label` in environment (`exported_keying_material`) for use by plugins in `OPENVPN_PLUGIN_TLS_FINAL` callback.
+  
+  <Note>
+  Exporter `labels` have the potential to collide with existing PRF labels. In order to prevent this, labels MUST begin with `EXPORTER`.
+  </Note>
+  
+  ```bash
+  openvpn --keying-material-exporter "EXPORTER-mylabel" 32
+  ```
+</ParamField>
+
+<ParamField path="--remap-usr1" type="string">
+  Control whether internally or externally generated `SIGUSR1` signals are remapped to `SIGHUP` (restart without persisting state) or `SIGTERM` (exit).
+  
+  `signal` can be set to `SIGHUP` or `SIGTERM`. By default, no remapping occurs.
+  
+  ```bash
+  openvpn --remap-usr1 SIGHUP
+  ```
+</ParamField>
+
+<ParamField path="--test-crypto" type="flag">
+  Do a self-test of OpenVPN's crypto options by encrypting and decrypting test packets using the data channel encryption options specified above. This option does not require a peer to function, and therefore can be specified without `--dev` or `--remote`.
+  
+  This option is very useful to test OpenVPN after it has been ported to a new platform, or to isolate problems in the compiler, OpenSSL crypto library, or OpenVPN's crypto code.
+  
+  ```bash
+  openvpn --test-crypto
+  
+  # With verbose output
+  openvpn --test-crypto --verb 9
+  ```
+</ParamField>

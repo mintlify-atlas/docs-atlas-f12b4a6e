@@ -1,0 +1,448 @@
+---
+title: Management interface
+description: Remotely control and monitor OpenVPN via TCP socket or Unix domain socket
+---
+
+The OpenVPN management interface allows external programs to administratively control an OpenVPN daemon via a TCP or Unix domain socket. It works in both client and server modes.
+
+## Overview
+
+The management interface uses a client/server TCP connection or Unix domain socket where OpenVPN listens for incoming management client connections.
+
+<Warning>
+The management protocol is currently cleartext without an explicit security layer. Only listen on:
+- Unix domain sockets
+- Localhost (127.0.0.1)
+- The local VPN address
+</Warning>
+
+## Enabling the interface
+
+Add the `--management` directive to your configuration:
+
+```text
+# Listen on localhost port 7505
+management 127.0.0.1 7505
+
+# Or use a Unix domain socket
+management /var/run/openvpn/management.sock unix
+```
+
+See the [man page](/reference/man) for additional management directives.
+
+## Connecting to the interface
+
+Once OpenVPN starts, connect using telnet in "raw" mode:
+
+```bash
+telnet 127.0.0.1 7505
+```
+
+Or for Unix sockets:
+
+```bash
+socat - UNIX-CONNECT:/var/run/openvpn/management.sock
+```
+
+Use the `help` command to list all available commands:
+
+```
+> help
+```
+
+## Core commands
+
+### State monitoring
+
+Monitor OpenVPN state changes in real-time:
+
+```
+state on
+```
+
+Possible states:
+- `CONNECTING` - Initial state
+- `WAIT` - Waiting for server response (client only)
+- `AUTH` - Authenticating with server (client only)
+- `GET_CONFIG` - Downloading configuration (client only)
+- `ASSIGN_IP` - Assigning IP address
+- `ADD_ROUTES` - Adding routes
+- `CONNECTED` - Initialization complete
+- `RECONNECTING` - Restart occurred
+- `EXITING` - Graceful exit in progress
+
+### Log monitoring
+
+View the log file cache:
+
+```
+# Enable real-time log output
+log on
+
+# Show last 20 lines
+log 20
+
+# Show all cached history then enable real-time
+log on all
+```
+
+Log messages include:
+- Unix timestamp
+- Flags: `I` (info), `F` (fatal), `N` (non-fatal error), `W` (warning), `D` (debug)
+- Message text
+
+### Status information
+
+```
+# Show default status format
+status
+
+# Show status format version 3
+status 3
+```
+
+### Bandwidth monitoring
+
+<CodeGroup>
+
+```text Client
+# Update every 5 seconds
+bytecount 5
+
+# Output format
+>BYTECOUNT:12345678,87654321
+```
+
+```text Server
+# Update every 5 seconds
+bytecount 5
+
+# Output format (per client)
+>BYTECOUNT_CLI:42,12345678,87654321
+```
+
+</CodeGroup>
+
+## Client management (server mode)
+
+### Viewing connected clients
+
+```
+status 2
+```
+
+### Killing a client
+
+```
+# By common name
+kill Test-Client
+
+# By address
+kill tcp:1.2.3.4:4000
+
+# By client ID
+client-kill 42
+```
+
+### Client authentication
+
+Start the server with `--management-client-auth`:
+
+```text
+management 127.0.0.1 7505
+management-client-auth
+```
+
+The interface will send `>CLIENT:CONNECT` notifications:
+
+```
+>CLIENT:CONNECT,0,0
+>CLIENT:ENV,common_name=client1
+>CLIENT:ENV,username=user1
+>CLIENT:ENV,trusted_ip=192.168.1.10
+>CLIENT:ENV,END
+```
+
+Authorize the client:
+
+```
+client-auth 0 0
+END
+```
+
+Or deny:
+
+```
+client-deny 0 0 "Reason for denial" "Client message"
+```
+
+## Password and credential handling
+
+### Providing passwords
+
+When OpenVPN needs a password, it sends:
+
+```
+>PASSWORD:Need 'Private Key' password
+```
+
+Respond with:
+
+```
+password "Private Key" mypassword
+```
+
+### Username/password authentication
+
+When auth-user-pass is needed:
+
+```
+>PASSWORD:Need 'Auth' username/password
+```
+
+Respond with:
+
+```
+username "Auth" myusername
+password "Auth" mypassword
+```
+
+### Static challenge/response
+
+When a static challenge is required:
+
+```
+>PASSWORD:Need 'Auth' username/password SC:1,Please enter token PIN
+```
+
+Respond with:
+
+```
+username "Auth" myusername
+password "Auth" "SCRV1:YmFy:ODY3NTMwOQ=="
+```
+
+The password format is `SCRV1:<password_base64>:<response_base64>`.
+
+## Hold and release
+
+Start OpenVPN in hold state:
+
+```bash
+openvpn --config client.conf --management-hold
+```
+
+OpenVPN will send:
+
+```
+>HOLD:Waiting for hold release:10
+```
+
+Release the hold:
+
+```
+hold release
+```
+
+## Signal control
+
+Send signals to the daemon:
+
+```
+# Restart
+signal SIGUSR1
+
+# Soft restart
+signal SIGHUP
+
+# Terminate
+signal SIGTERM
+```
+
+## Remote host override (client mode)
+
+With `--management-query-remote`, the interface can override connection targets:
+
+```
+>REMOTE:vpn.example.com,1194,udp
+```
+
+Override the host and port:
+
+```
+remote MOD vpn.other.com 443
+```
+
+Or accept the default:
+
+```
+remote ACCEPT
+```
+
+Or skip to the next entry:
+
+```
+remote SKIP
+```
+
+## External key operations
+
+### RSA/EC signing
+
+With `--management-external-key`, OpenVPN will request signatures:
+
+```
+>PK_SIGN:[BASE64_DATA],[ALGORITHM]
+```
+
+Respond with the signature:
+
+```
+pk-sig
+BASE64_SIGNATURE_LINE_1
+BASE64_SIGNATURE_LINE_2
+END
+```
+
+Supported algorithms:
+- `RSA_PKCS1_PADDING` - PKCS1 padding
+- `RSA_NO_PADDING` - No padding
+- `ECDSA` - EC signature
+- `RSA_PKCS1_PSS_PADDING,params` - PSS padding with parameters
+
+### External certificate
+
+With `--management-external-cert`, OpenVPN will request the certificate:
+
+```
+>NEED-CERTIFICATE:macosx-keychain:subject:o=OpenVPN-TEST
+```
+
+Respond with the PEM-encoded certificate:
+
+```
+certificate
+BASE64_CERT_LINE_1
+BASE64_CERT_LINE_2
+END
+```
+
+## Pending authentication (server mode)
+
+Require additional authentication steps:
+
+```
+client-pending-auth 42 0 "WEB_AUTH:external:https://sso.example.com/auth" 300
+```
+
+The client receives:
+
+```
+>STATE:datetime,AUTH_PENDING,300,,,,,
+>INFOMSG:WEB_AUTH:external:https://sso.example.com/auth
+```
+
+Supported methods:
+- `WEB_AUTH:flags:url` - Open URL for authentication
+- `CR_TEXT:flags:challenge_text` - Text-based challenge/response
+
+Flags:
+- `E` - Echo the response
+- `R` - Response required
+- `proxy` - Use HTTP proxy
+- `hidden` - Start webview in hidden mode
+- `external` - Use external browser
+
+## Output format
+
+### Command responses
+
+```
+SUCCESS: command completed
+ERROR: error message
+```
+
+Multi-line output ends with:
+
+```
+END
+```
+
+### Real-time notifications
+
+Real-time messages start with `>` followed by a type:
+
+- `>BYTECOUNT:` - Bandwidth usage
+- `>CLIENT:` - Client events
+- `>ECHO:` - Echo messages
+- `>FATAL:` - Fatal errors
+- `>HOLD:` - Hold state
+- `>INFO:` - Informational messages
+- `>LOG:` - Log messages
+- `>PASSWORD:` - Password requests
+- `>STATE:` - State changes
+- `>INFOMSG:` - Authentication info
+
+## Management version
+
+Set the management interface version:
+
+```
+# Announce version 3 support
+version 3
+```
+
+Version requirements:
+- Version 2+ - Required for `>PK_SIGN:[base64]`
+- Version 3+ - Required for `>PK_SIGN:[base64],[alg]`
+- Version 4+ - Receives `SUCCESS` response to version command
+
+## Example Python client
+
+```python
+import socket
+
+def send_command(sock, command):
+    sock.sendall(f"{command}\n".encode())
+    response = sock.recv(4096).decode()
+    return response
+
+# Connect to management interface
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect(('127.0.0.1', 7505))
+
+# Enable state notifications
+print(send_command(sock, "state on"))
+
+# Get current status
+print(send_command(sock, "status 2"))
+
+# Monitor in real-time
+while True:
+    data = sock.recv(4096)
+    if data:
+        print(data.decode(), end='')
+```
+
+## Security considerations
+
+<Warning>
+The management interface has no built-in encryption or authentication.
+</Warning>
+
+### Best practices
+
+1. **Use Unix domain sockets** when possible
+2. **Restrict to localhost** for TCP sockets
+3. **Use firewall rules** to limit access
+4. **Set file permissions** on Unix sockets
+5. **Avoid exposing over VPN** - some features won't work correctly
+
+### Password security
+
+With `--management-query-passwords`, credentials are transmitted in cleartext over the management socket. This is acceptable for:
+- Unix domain sockets with restricted permissions
+- Localhost connections
+- VPN connections (with limited functionality)
+
+Never expose the management interface on a public network.

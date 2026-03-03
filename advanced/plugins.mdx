@@ -1,0 +1,390 @@
+---
+title: Plugins
+description: Extend OpenVPN functionality with compiled plugin modules
+---
+
+OpenVPN supports compiled plugin modules on any *nix OS with `libdl` and on Windows. Plugins can intercept script callbacks to extend authentication, logging, and connection handling.
+
+## Plugin architecture
+
+Plugins are loaded at startup using the `--plugin` directive. Each plugin can register handlers for specific events in the OpenVPN lifecycle.
+
+### Supported hooks
+
+Plugins can intercept the following script callbacks:
+
+1. `up` - After TUN/TAP device open
+2. `down` - After TUN/TAP device close
+3. `route-up` - After routes are added
+4. `ipchange` - When remote IP changes
+5. `tls-verify` - During TLS certificate verification
+6. `auth-user-pass-verify` - For username/password authentication
+7. `client-connect` - When client connects (server mode)
+8. `client-disconnect` - When client disconnects (server mode)
+9. `learn-address` - When address is learned (server mode)
+
+See `openvpn-plugin.h` in the source distribution for detailed API documentation.
+
+## Loading plugins
+
+Load a plugin using the `--plugin` directive:
+
+```text
+# Load plugin without arguments
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-auth-pam.so
+
+# Load plugin with arguments
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-auth-pam.so login
+```
+
+Multiple plugins can be loaded:
+
+```text
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-auth-pam.so login
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-down-root.so
+```
+
+## Included plugins
+
+### auth-pam
+
+Authenticate users against PAM using a split privilege execution model.
+
+<Steps>
+
+### Configure PAM service
+
+Create `/etc/pam.d/openvpn`:
+
+```text
+auth    required    pam_unix.so shadow nodelay
+account required    pam_unix.so
+```
+
+### Load the plugin
+
+```text
+# Server configuration
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-auth-pam.so login
+
+# Require username/password
+auth-user-pass-verify /bin/true via-env
+```
+
+### Test authentication
+
+Clients must provide valid system credentials:
+
+```text
+# Client configuration
+auth-user-pass
+```
+
+</Steps>
+
+<Info>
+The auth-pam plugin works even after privileges are dropped with `--user`, `--group`, or `--chroot`.
+</Info>
+
+**Features:**
+
+- PAM authentication with privilege separation
+- Works after privilege drop (`--user`/`--group`/`--chroot`)
+- Tested on Linux only
+- Split privilege model for enhanced security
+
+**Configuration:**
+
+```text
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-auth-pam.so service-name
+```
+
+The `service-name` parameter specifies which PAM service configuration to use (e.g., `login`, `openvpn`).
+
+### down-root
+
+Execute down scripts with root privileges even after dropping privileges.
+
+<Warning>
+This plugin allows privileged script execution. Only use with trusted scripts.
+</Warning>
+
+**Use case:**
+
+When using `--user` and `--group` to drop privileges, the `--down` script normally runs with reduced privileges. This plugin allows the down script to run as root for cleanup tasks that require elevated permissions.
+
+**Configuration:**
+
+```text
+user nobody
+group nogroup
+
+# Load down-root plugin
+plugin /usr/lib/openvpn/plugins/openvpn-plugin-down-root.so /etc/openvpn/down.sh
+
+# Regular down script runs as nobody
+down /etc/openvpn/down-unprivileged.sh
+```
+
+**Features:**
+
+- Runs down scripts with root privileges
+- Works after `--user`/`--group`/`--chroot`
+- Not applicable on Windows
+
+### examples
+
+A portable example plugin demonstrating the plugin API.
+
+**Location:** `src/plugins/examples/` in the source distribution
+
+**Purpose:**
+
+- Demonstrates plugin API usage
+- Shows portable plugin development (*nix and Windows)
+- Serves as a template for custom plugins
+
+**Building:**
+
+```bash
+cd src/plugins/examples
+./build.sh
+```
+
+## Building plugins
+
+### From source distribution
+
+<Steps>
+
+### Navigate to plugin directory
+
+```bash
+cd src/plugins/auth-pam
+```
+
+### Build the plugin
+
+```bash
+make
+```
+
+### Install (optional)
+
+```bash
+sudo make install
+```
+
+</Steps>
+
+<Note>
+The examples plugin uses a build script instead of a Makefile:
+```bash
+cd src/plugins/examples
+./build.sh
+```
+</Note>
+
+### Custom plugin development
+
+Create a custom plugin by implementing the plugin API defined in `openvpn-plugin.h`:
+
+```c
+#include <openvpn-plugin.h>
+
+OPENVPN_EXPORT int
+openvpn_plugin_open_v3(const int version,
+                       struct openvpn_plugin_args_open_in const *args,
+                       struct openvpn_plugin_args_open_return *ret)
+{
+    // Initialize plugin
+    return OPENVPN_PLUGIN_FUNC_SUCCESS;
+}
+
+OPENVPN_EXPORT int
+openvpn_plugin_func_v3(const int version,
+                       struct openvpn_plugin_args_func_in const *args,
+                       struct openvpn_plugin_args_func_return *ret)
+{
+    // Handle plugin events
+    switch (args->type) {
+        case OPENVPN_PLUGIN_AUTH_USER_PASS_VERIFY:
+            // Authenticate user
+            break;
+        case OPENVPN_PLUGIN_CLIENT_CONNECT:
+            // Handle client connection
+            break;
+    }
+    return OPENVPN_PLUGIN_FUNC_SUCCESS;
+}
+
+OPENVPN_EXPORT void
+openvpn_plugin_close_v1(openvpn_plugin_handle_t handle)
+{
+    // Cleanup
+}
+```
+
+## Plugin vs script
+
+Choose plugins over scripts when:
+
+<CodeGroup>
+
+```text Plugins
+✓ Performance is critical
+✓ Need to handle multiple events efficiently
+✓ Require state management between events
+✓ Need access to OpenVPN internal functions
+✓ Want to distribute compiled code
+```
+
+```text Scripts
+✓ Rapid development and testing
+✓ Need to use shell utilities
+✓ Require portability across systems
+✓ Prefer maintainability over performance
+✓ Need quick configuration changes
+```
+
+</CodeGroup>
+
+## Environmental variables
+
+Plugins receive the same environmental variables as scripts. See [scripting](/advanced/scripting) for details.
+
+Key variables include:
+
+- `common_name` - Client's certificate CN
+- `username` / `password` - Auth credentials
+- `trusted_ip` / `trusted_port` - Client's address
+- `ifconfig_pool_remote_ip` - Assigned VPN IP
+- `time_unix` - Connection timestamp
+
+Access environmental variables in your plugin:
+
+```c
+const char *
+get_env(const char *name, const char *envp[])
+{
+    if (envp) {
+        int i;
+        const int namelen = strlen(name);
+        for (i = 0; envp[i]; ++i) {
+            if (!strncmp(envp[i], name, namelen)) {
+                const char *cp = envp[i] + namelen;
+                if (*cp == '=') {
+                    return cp + 1;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+// Usage
+const char *username = get_env("username", args->envp);
+```
+
+## Plugin return codes
+
+Plugins should return one of these codes:
+
+- `OPENVPN_PLUGIN_FUNC_SUCCESS` - Operation successful
+- `OPENVPN_PLUGIN_FUNC_ERROR` - Operation failed
+- `OPENVPN_PLUGIN_FUNC_DEFERRED` - Operation deferred (async)
+
+For deferred operations:
+
+```c
+// Return deferred immediately
+return OPENVPN_PLUGIN_FUNC_DEFERRED;
+
+// Later, from background thread:
+// Write result to auth_control_file
+```
+
+## Deferred authentication
+
+Plugins can defer authentication decisions for async operations:
+
+<Steps>
+
+### Return deferred status
+
+```c
+if (args->type == OPENVPN_PLUGIN_AUTH_USER_PASS_VERIFY) {
+    // Start background authentication
+    start_async_auth(username, password, auth_control_file);
+    return OPENVPN_PLUGIN_FUNC_DEFERRED;
+}
+```
+
+### Process authentication asynchronously
+
+```c
+void background_auth(const char *user, const char *pass, const char *file) {
+    bool success = check_credentials(user, pass);
+    
+    // Write result to control file
+    FILE *f = fopen(file, "w");
+    fprintf(f, "%d\n", success ? 1 : 0);
+    fclose(f);
+}
+```
+
+### OpenVPN resumes
+
+OpenVPN monitors the control file and resumes the connection when the result is written.
+
+</Steps>
+
+## Security considerations
+
+<Warning>
+Plugins run with the same privileges as OpenVPN. Ensure plugins are secure and trustworthy.
+</Warning>
+
+### Best practices
+
+1. **Validate all input** from environmental variables
+2. **Drop privileges** early if possible
+3. **Use secure coding practices** to prevent buffer overflows
+4. **Audit plugin code** before deployment
+5. **Keep plugins updated** with security patches
+6. **Limit plugin functionality** to what's necessary
+7. **Test thoroughly** in development environments
+
+### Common vulnerabilities
+
+- **Buffer overflows** - Validate string lengths
+- **Command injection** - Sanitize inputs used in system calls
+- **Race conditions** - Use proper locking for shared resources
+- **Memory leaks** - Free allocated memory properly
+- **Path traversal** - Validate file paths
+
+## Debugging plugins
+
+Enable verbose logging:
+
+```bash
+openvpn --config server.conf --verb 6
+```
+
+Use the plugin log function:
+
+```c
+static plugin_log_t plugin_log = NULL;
+
+// In open_v3:
+plugin_log = args->callbacks->plugin_log;
+
+// Later:
+plugin_log(PLOG_DEBUG, "MyPlugin", "Debug message: %s", value);
+```
+
+Log levels:
+- `PLOG_ERR` - Errors
+- `PLOG_WARN` - Warnings
+- `PLOG_NOTE` - Notices
+- `PLOG_DEBUG` - Debug messages

@@ -1,0 +1,382 @@
+---
+title: TLS/SSL setup and configuration
+description: Configure TLS/SSL for OpenVPN to establish secure control and data channels using certificate-based authentication
+---
+
+## Overview
+
+TLS mode is the most powerful crypto mode of OpenVPN in both security and flexibility. TLS mode works by establishing control and data channels which are multiplexed over a single TCP/UDP port. OpenVPN initiates a TLS session over the control channel and uses it to exchange cipher and HMAC keys to protect the data channel.
+
+<Note>
+TLS mode uses a robust reliability layer over the UDP connection for all control channel communication, while the data channel forwards encrypted tunnel data without any mediation.
+</Note>
+
+## Certificate requirements
+
+To use TLS mode, each peer that runs OpenVPN should have its own local certificate/key pair (`--cert` and `--key`), signed by the root certificate which is specified in `--ca`.
+
+When two OpenVPN peers connect:
+
+<Steps>
+  <Step title="Certificate presentation">
+    Each peer presents its local certificate to the other.
+  </Step>
+  
+  <Step title="Certificate verification">
+    Each peer checks that its partner peer presented a certificate which was signed by the master root certificate as specified in `--ca`.
+  </Step>
+  
+  <Step title="TLS negotiation">
+    If verification succeeds on both peers, the TLS negotiation completes and both OpenVPN peers exchange temporary session keys.
+  </Step>
+  
+  <Step title="Tunnel establishment">
+    The tunnel begins passing data securely.
+  </Step>
+</Steps>
+
+## Basic TLS configuration
+
+### Server configuration
+
+```bash
+# Enable TLS server mode
+tls-server
+
+# Certificate authority (root certificate)
+ca /etc/openvpn/ca.crt
+
+# Server certificate
+cert /etc/openvpn/server.crt
+
+# Server private key
+key /etc/openvpn/server.key
+
+# Diffie Hellman parameters (optional, use 'none' for ECDH only)
+dh /etc/openvpn/dh2048.pem
+# OR for modern setups:
+dh none
+```
+
+### Client configuration
+
+```bash
+# Enable TLS client mode
+tls-client
+
+# Certificate authority (root certificate)
+ca /etc/openvpn/ca.crt
+
+# Client certificate
+cert /etc/openvpn/client.crt
+
+# Client private key
+key /etc/openvpn/client.key
+
+# Verify server certificate
+remote-cert-tls server
+```
+
+## TLS authentication and encryption
+
+### tls-auth: HMAC authentication
+
+The `--tls-auth` option adds an additional layer of HMAC authentication on top of the TLS control channel to mitigate DoS attacks and attacks on the TLS stack.
+
+<CodeGroup>
+```bash Server
+# Generate the shared key (run once)
+openvpn --genkey tls-auth ta.key
+
+# Server configuration
+tls-auth ta.key 0
+```
+
+```bash Client
+# Client configuration (note direction is opposite)
+tls-auth ta.key 1
+```
+</CodeGroup>
+
+<Note>
+The `direction` parameter should always be complementary on either side of the connection. One side uses `0` and the other uses `1`, or both sides omit it altogether.
+</Note>
+
+**Benefits of tls-auth:**
+- Packets without correct HMAC signature are dropped immediately
+- Protects against DoS attacks by preventing resource consumption
+- Provides replay protection
+- Minimal resource usage before authentication
+
+### tls-crypt: Encrypted authentication
+
+The `--tls-crypt` option encrypts and authenticates all control channel packets, providing additional privacy and security.
+
+```bash
+# Generate the shared key (run once)
+openvpn --genkey tls-crypt tc.key
+
+# Both server and client use the same configuration
+tls-crypt tc.key
+```
+
+<Warning>
+**Security consideration:** All peers use the same `--tls-crypt` pre-shared group key. For setups with many clients, the key should be rotated periodically. For large setups, consider using `--tls-crypt-v2` instead.
+</Warning>
+
+**Advantages over tls-auth:**
+- Provides more privacy by hiding the certificate used for TLS connection
+- Makes it harder to identify OpenVPN traffic
+- Provides "poor-man's" post-quantum security
+- No need to set `--key-direction`
+
+### tls-crypt-v2: Client-specific keys
+
+The `--tls-crypt-v2` option uses client-specific tls-crypt keys, which is ideal for large deployments and VPN providers.
+
+<Steps>
+  <Step title="Generate server key">
+    ```bash
+    openvpn --genkey tls-crypt-v2-server v2server.key
+    ```
+  </Step>
+  
+  <Step title="Configure server">
+    ```bash
+    # Server configuration
+    tls-crypt-v2 v2server.key
+    
+    # Optional: force modern cookie-based handshake (OpenVPN 2.6+)
+    tls-crypt-v2 v2server.key force-cookie
+    ```
+  </Step>
+  
+  <Step title="Generate client key">
+    ```bash
+    # Generate client-specific key (requires server key)
+    openvpn --tls-crypt-v2 v2server.key --genkey tls-crypt-v2-client v2client-1.key
+    
+    # Optional: include metadata (base64-encoded, max 733 bytes)
+    openvpn --tls-crypt-v2 v2server.key --genkey tls-crypt-v2-client v2client-1.key "dXNlcj1qb2huZG9l"
+    ```
+  </Step>
+  
+  <Step title="Configure client">
+    ```bash
+    # Client configuration
+    tls-crypt-v2 v2client-1.key
+    ```
+  </Step>
+</Steps>
+
+**Benefits:**
+- Client-specific keys reduce impact of key compromise
+- Improved DoS resilience
+- Metadata can be used to identify/reject clients before TLS handshake
+- Compatible with servers also supporting `--tls-auth` or `--tls-crypt`
+
+### Metadata verification
+
+Servers can verify client metadata before exposing the TLS stack:
+
+```bash
+# Server configuration
+tls-crypt-v2-verify /etc/openvpn/verify-metadata.sh
+
+# Reject keys older than 365 days
+tls-crypt-v2-max-age 365
+```
+
+## TLS version and cipher selection
+
+### TLS version constraints
+
+```bash
+# Set minimum TLS version (default: 1.2)
+tls-version-min 1.2
+
+# Set maximum TLS version
+tls-version-max 1.3
+```
+
+### TLS cipher configuration
+
+<Warning>
+These options are expert features. Use with care to avoid breaking your connection.
+</Warning>
+
+```bash
+# TLS 1.2 and below ciphers
+tls-cipher TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384:TLS-DHE-RSA-WITH-AES-256-GCM-SHA384
+
+# TLS 1.3 ciphers
+tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+
+# View available ciphers
+openvpn --show-tls
+```
+
+### Elliptic curve configuration
+
+```bash
+# Set allowed elliptic curves/groups
+tls-groups X25519:secp256r1:secp384r1
+
+# Set specific curve for ECDH (deprecated in favor of tls-groups)
+ecdh-curve secp384r1
+
+# View available curves
+openvpn --show-groups
+```
+
+## Certificate validation
+
+### Remote certificate type verification
+
+```bash
+# Client configuration: verify connecting to a server
+remote-cert-tls server
+
+# Server configuration: verify client certificates
+remote-cert-tls client
+```
+
+This is equivalent to:
+```bash
+# For server verification
+remote-cert-ku
+remote-cert-eku "TLS Web Server Authentication"
+
+# For client verification
+remote-cert-ku
+remote-cert-eku "TLS Web Client Authentication"
+```
+
+### Certificate name verification
+
+```bash
+# Match complete subject DN
+verify-x509-name 'C=US, ST=CA, L=San Francisco, CN=vpn.example.com'
+
+# Match specific RDN (default: CN)
+verify-x509-name vpn.example.com name
+
+# Match RDN prefix (useful for multiple servers)
+verify-x509-name 'vpn-' name-prefix
+```
+
+### Fingerprint verification
+
+```bash
+# Single fingerprint
+peer-fingerprint AD:B0:95:D8:09:C8:36:45:12:A9:89:C8:90:09:CB:13:72:A6:AD:16:...
+
+# Multiple fingerprints (inline)
+<peer-fingerprint>
+00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
+11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00
+</peer-fingerprint>
+```
+
+<Note>
+When using `--peer-fingerprint`, specifying a CA with `--ca` or `--capath` is optional. This allows peer-fingerprint to be used as an alternative to a full PKI with self-signed certificates.
+</Note>
+
+## Certificate revocation
+
+```bash
+# Use CRL file
+crl-verify /etc/openvpn/crl.pem
+
+# Use CRL directory with serial numbers
+crl-verify /etc/openvpn/crl dir
+```
+
+<Note>
+If the CRL is missing, OpenVPN will log a warning but still allow the connection. Ensure the user running OpenVPN has read permissions to the CRL file.
+</Note>
+
+## Advanced TLS options
+
+### Certificate profile restrictions
+
+```bash
+# Set certificate crypto profile
+tls-cert-profile preferred  # SHA2+, RSA 2048-bit+
+# Other options: insecure, legacy (default), suiteb
+```
+
+### Handshake timeout
+
+```bash
+# TLS handshake window (default: 60 seconds)
+hand-window 120
+
+# Packet retransmit timeout (default: 2 seconds)
+tls-timeout 3
+```
+
+### Private key password protection
+
+```bash
+# Prompt for password on startup
+askpass
+
+# Read password from file
+askpass /etc/openvpn/keypass.txt
+```
+
+<Warning>
+Storing your password in a file reduces the security benefit of using an encrypted key.
+</Warning>
+
+## Best practices
+
+1. **Always verify peer certificates** using `--remote-cert-tls`, `--verify-x509-name`, or `--peer-fingerprint`
+
+2. **Use tls-crypt or tls-crypt-v2** for additional security and DoS protection
+
+3. **Set minimum TLS version** to 1.2 or higher
+
+4. **Use modern key exchange** with `dh none` to rely on ECDH/X25519
+
+5. **Rotate tls-crypt keys** periodically in large deployments
+
+6. **Implement CRL checking** to handle compromised certificates
+
+7. **Use certificate profiles** to enforce minimum cryptographic standards
+
+## Troubleshooting
+
+### View supported algorithms
+
+```bash
+# Show TLS ciphers
+openvpn --show-tls
+
+# Show elliptic curves
+openvpn --show-groups
+
+# Show data channel ciphers
+openvpn --show-ciphers
+
+# Show message digests
+openvpn --show-digests
+```
+
+### Common issues
+
+**TLS handshake timeout:**
+- Increase `--hand-window` value
+- Check firewall rules
+- Verify time synchronization between peers
+
+**Certificate verification failed:**
+- Verify CA certificate matches on both peers
+- Check certificate expiration dates
+- Ensure certificate chain is complete
+
+**No shared cipher:**
+- Check `--tls-cipher` and `--tls-ciphersuites` compatibility
+- Verify crypto library versions support the same algorithms
+- Review `--tls-groups` configuration

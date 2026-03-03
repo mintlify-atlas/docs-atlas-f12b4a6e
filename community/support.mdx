@@ -1,0 +1,221 @@
+---
+title: Getting support
+description: Find help and support for OpenVPN through community resources, documentation, and commercial support options
+---
+
+Whether you're setting up OpenVPN for the first time or troubleshooting a complex deployment, there are multiple resources available to help you succeed.
+
+## Community support
+
+The OpenVPN community provides free support through various channels:
+
+<CardGroup cols={2}>
+  <Card title="Community forums" icon="comments" href="https://community.openvpn.net/">
+    Ask questions and get help from the community
+  </Card>
+  
+  <Card title="IRC chat" icon="message" href="https://libera.chat">
+    Real-time help on #openvpn-devel at irc.libera.chat
+  </Card>
+  
+  <Card title="GitHub issues" icon="github" href="https://github.com/OpenVPN/openvpn/issues">
+    Report bugs and track known issues
+  </Card>
+  
+  <Card title="Mailing list" icon="envelope" href="https://lists.sourceforge.net/lists/listinfo/openvpn-devel">
+    Technical discussions and developer support
+  </Card>
+</CardGroup>
+
+### Community forums and wiki
+
+The OpenVPN community website provides:
+- User forums for questions and discussions
+- Comprehensive wiki with guides and tutorials
+- FAQ for common issues
+- Developer documentation
+
+Visit: [https://community.openvpn.net/](https://community.openvpn.net/)
+
+### IRC channel
+
+For quick questions and real-time support:
+
+**Channel:** #openvpn-devel on irc.libera.chat
+
+<Info>
+  You need to register and log in to Libera to join the channel. See the [Libera Chat registration guide](https://libera.chat/guides/registration).
+</Info>
+
+The IRC channel is best for:
+- Quick technical questions
+- Development discussions
+- Getting fast feedback on patches or configurations
+
+### Mailing list
+
+The openvpn-devel mailing list is the primary channel for:
+- In-depth technical discussions
+- Reporting complex bugs
+- Discussing architecture and design
+- Submitting and reviewing patches
+
+Subscribe at: [https://lists.sourceforge.net/lists/listinfo/openvpn-devel](https://lists.sourceforge.net/lists/listinfo/openvpn-devel)
+
+## Documentation resources
+
+<CardGroup cols={2}>
+  <Card title="Man page" icon="book" href="http://openvpn.net/man.html">
+    Complete reference for all OpenVPN options and features
+  </Card>
+  
+  <Card title="HOWTO" icon="graduation-cap" href="http://openvpn.net/howto.html">
+    Step-by-step guide to setting up OpenVPN
+  </Card>
+  
+  <Card title="Community wiki" icon="wikipedia-w" href="https://community.openvpn.net/">
+    User-contributed guides, tutorials, and documentation
+  </Card>
+  
+  <Card title="FAQ" icon="question-circle" href="https://community.openvpn.net/openvpn/wiki/FAQ">
+    Frequently asked questions and common solutions
+  </Card>
+</CardGroup>
+
+### Official documentation
+
+The OpenVPN man page is the authoritative reference for all configuration options:
+- Command-line options
+- Configuration file directives
+- Cryptographic settings
+- Network configuration
+- Authentication methods
+
+View at: [http://openvpn.net/man.html](http://openvpn.net/man.html)
+
+### Sample configurations
+
+The OpenVPN source includes sample configuration files and scripts:
+- Basic client and server configurations
+- Advanced multi-client setups
+- Authentication scripts
+- Sample certificates (for testing only)
+
+Find examples at: [http://openvpn.net/howto.html](http://openvpn.net/howto.html)
+
+## Reporting issues
+
+<Note>
+  Make sure you're reporting issues for the correct product. The community project is separate from commercial OpenVPN products.
+</Note>
+
+### OpenVPN open source
+
+For bugs in the community OpenVPN project:
+
+<Steps>
+  <Step title="Search existing issues">
+    Check if your issue is already reported at [GitHub Issues](https://github.com/OpenVPN/openvpn/issues)
+  </Step>
+  
+  <Step title="Gather information">
+    Collect:
+    - OS and version
+    - OpenVPN version
+    - Configuration files (remove sensitive data)
+    - Error messages and logs
+    - Steps to reproduce
+  </Step>
+  
+  <Step title="Create issue report">
+    Open a new issue at [https://github.com/OpenVPN/openvpn/issues/new](https://github.com/OpenVPN/openvpn/issues/new)
+  </Step>
+  
+  <Step title="Provide details">
+    Include:
+    - Clear description of the bug
+    - Steps to reproduce
+    - Expected vs actual behavior
+    - Version information
+    - Relevant configuration (sanitized)
+  </Step>
+</Steps>
+
+### Commercial OpenVPN products
+
+<Info>
+  OpenVPN Access Server, OpenVPN Connect, and other commercial products have separate support channels.
+</Info>
+
+For commercial products, contact OpenVPN Inc. directly:
+
+**Support portal:** [https://support.openvpn.net](https://support.openvpn.net)
+
+Commercial products include:
+- OpenVPN Access Server
+- OpenVPN Connect client apps
+- OpenVPN Cloud
+- Enterprise support plans
+
+## Before asking for help
+
+To get the best help quickly:
+
+### Check the documentation first
+
+1. Read the relevant section in the [man page](http://openvpn.net/man.html)
+2. Review the [HOWTO guide](http://openvpn.net/howto.html)
+3. Search the [FAQ](https://community.openvpn.net/openvpn/wiki/FAQ)
+4. Look for similar issues on [GitHub](https://github.com/OpenVPN/openvpn/issues)
+
+### Prepare your question
+
+Include:
+- What you're trying to accomplish
+- What you've already tried
+- Specific error messages (exact text)
+- Relevant configuration (with secrets removed)
+- OS and OpenVPN version information
+- Network topology (if relevant)
+
+### Sanitize sensitive information
+
+<Note>
+  Always remove sensitive information before sharing:
+  - Private keys and certificates
+  - Passwords and authentication credentials
+  - Real IP addresses (use examples like 192.0.2.1)
+  - Domain names that reveal your infrastructure
+</Note>
+
+## Contributing back
+
+If you've solved a problem or learned something valuable:
+
+- Update the wiki with your findings
+- Answer questions in the forums
+- Submit documentation improvements
+- Share configuration examples
+- Report bugs you encounter
+
+See the [Contributing guide](/community/contributing) to learn how to contribute code, documentation, and improvements.
+
+## Related resources
+
+<CardGroup cols={2}>
+  <Card title="Community overview" icon="users" href="/community/overview">
+    Connect with the OpenVPN community
+  </Card>
+  
+  <Card title="Contributing" icon="code-branch" href="/community/contributing">
+    Learn how to contribute to OpenVPN
+  </Card>
+  
+  <Card title="Downloads" icon="download" href="https://openvpn.net/community-downloads/">
+    Get the latest OpenVPN release
+  </Card>
+  
+  <Card title="GitHub" icon="github" href="https://github.com/OpenVPN/openvpn">
+    View source code and report issues
+  </Card>
+</CardGroup>

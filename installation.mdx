@@ -1,0 +1,397 @@
+---
+title: Installation
+description: Install OpenVPN from package managers or build from source on Linux, Windows, macOS, and BSD systems.
+---
+
+# Installation
+
+OpenVPN can be installed through package managers on most platforms or built from source for custom configurations. Choose the method that best fits your needs.
+
+<Tabs>
+  <Tab title="Linux">
+    ## Debian/Ubuntu
+
+    Install from the official repositories:
+
+    ```bash
+    sudo apt update
+    sudo apt install openvpn
+    ```
+
+    <Info>
+      The OpenVPN community provides updated package repositories at [community.openvpn.net/openvpn/wiki/OpenvpnSoftwareRepos](https://community.openvpn.net/openvpn/wiki/OpenvpnSoftwareRepos)
+    </Info>
+
+    ### Enable TUN/TAP driver
+
+    Load the TUN/TAP kernel module:
+
+    ```bash
+    sudo modprobe tun
+    ```
+
+    Enable IP forwarding for routing:
+
+    ```bash
+    echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
+    ```
+
+    <Note>
+      The modprobe command needs to be run once per reboot. Most distributions handle this automatically when using package manager installations.
+    </Note>
+
+    ## Red Hat/CentOS/Fedora
+
+    Install using yum or dnf:
+
+    ```bash
+    # RHEL/CentOS 7
+    sudo yum install epel-release
+    sudo yum install openvpn
+
+    # RHEL/CentOS 8+ and Fedora
+    sudo dnf install openvpn
+    ```
+
+    See the [Fedora package repository](https://src.fedoraproject.org/rpms/openvpn) for the latest versions.
+
+    ## Arch Linux
+
+    ```bash
+    sudo pacman -S openvpn
+    ```
+
+    ## openSUSE
+
+    ```bash
+    sudo zypper install openvpn
+    ```
+
+    ## Gentoo
+
+    ```bash
+    sudo emerge net-vpn/openvpn
+    ```
+  </Tab>
+
+  <Tab title="macOS">
+    ## Homebrew
+
+    Install OpenVPN using Homebrew:
+
+    ```bash
+    brew install openvpn
+    ```
+
+    The TUN/TAP driver is included and will be installed automatically.
+
+    ## Verify installation
+
+    ```bash
+    openvpn --version
+    ```
+
+    Expected output:
+
+    ```
+    OpenVPN 2.6.x x86_64-apple-darwin
+    library versions: OpenSSL 3.x.x, LZO 2.x
+    ```
+  </Tab>
+
+  <Tab title="Windows">
+    ## Windows installer
+
+    Download the community-provided Windows installer from:
+
+    [openvpn.net/community-downloads/](https://openvpn.net/community-downloads/)
+
+    The installer includes:
+    - OpenVPN executable and service
+    - TAP-Windows adapter driver
+    - GUI application for managing connections
+    - dco-win driver for kernel acceleration (Windows 10 2004+/Windows Server 2022+)
+
+    <Warning>
+      You may need to selectively disable the Windows firewall for the TAP adapter after installation.
+    </Warning>
+
+    ## Configuration location
+
+    Place configuration files in:
+
+    ```
+    C:\Program Files\OpenVPN\config\
+    ```
+
+    <Note>
+      On Windows, use double backslashes in configuration file paths:
+      `"C:\\Program Files\\OpenVPN\\config\\ca.crt"`
+    </Note>
+  </Tab>
+
+  <Tab title="FreeBSD">
+    ## Using pkg
+
+    ```bash
+    sudo pkg install openvpn
+    ```
+
+    ## TUN/TAP driver
+
+    FreeBSD ships with the TUN/TAP driver built-in. Device nodes (tap0-tap3, tun0-tun3) are created by default.
+
+    <Info>
+      FreeBSD 14 includes the ovpn(4) driver for kernel-level OpenVPN acceleration (DCO), which OpenVPN 2.6+ will use automatically if available.
+    </Info>
+  </Tab>
+
+  <Tab title="OpenBSD">
+    ## Using pkg_add
+
+    ```bash
+    pkg_add openvpn
+    ```
+
+    ## TUN device setup
+
+    OpenBSD dynamically creates TUN devices. Create an empty hostname file for each interface:
+
+    ```bash
+    sudo touch /etc/hostname.tun0
+    sudo touch /etc/hostname.tun1
+    ```
+
+    This creates the devices at boot time.
+  </Tab>
+</Tabs>
+
+## Build from source
+
+Building from source gives you the latest features and allows custom configuration options.
+
+<Steps>
+  <Step title="Download source code">
+    Download the latest release:
+
+    ```bash
+    wget https://openvpn.net/community-downloads/openvpn-2.6.x.tar.gz
+    tar -zxf openvpn-2.6.x.tar.gz
+    cd openvpn-2.6.x
+    ```
+
+    Or clone from the Git repository:
+
+    ```bash
+    git clone https://github.com/OpenVPN/openvpn
+    cd openvpn
+    git checkout release/2.6
+    ```
+  </Step>
+
+  <Step title="Install build dependencies">
+    <Tabs>
+      <Tab title="Debian/Ubuntu">
+        ```bash
+        sudo apt install build-essential libssl-dev liblzo2-dev \
+          liblz4-dev libpam0g-dev libnl-genl-3-dev libcap-ng-dev
+        ```
+      </Tab>
+      <Tab title="RHEL/CentOS/Fedora">
+        ```bash
+        sudo dnf install gcc make openssl-devel lzo-devel lz4-devel \
+          pam-devel libnl3-devel libcap-ng-devel
+        ```
+      </Tab>
+      <Tab title="macOS">
+        ```bash
+        brew install openssl lzo lz4
+        ```
+      </Tab>
+    </Tabs>
+
+    <Note>
+      OpenSSL 1.1.0 or higher is required. Alternatively, you can use mbed TLS 2.0 or higher.
+    </Note>
+  </Step>
+
+  <Step title="Configure build options">
+    From a release tarball:
+
+    ```bash
+    ./configure
+    ```
+
+    From Git repository checkout:
+
+    ```bash
+    autoreconf -i -v -f
+    ./configure
+    ```
+
+    View all configuration options:
+
+    ```bash
+    ./configure --help
+    ```
+
+    Example with custom OpenSSL location:
+
+    ```bash
+    ./configure OPENSSL_CFLAGS="-I/usr/local/include" \
+                OPENSSL_LIBS="-L/usr/local/lib -lssl -lcrypto"
+    ```
+  </Step>
+
+  <Step title="Compile and install">
+    ```bash
+    make
+    sudo make install
+    ```
+
+    By default, this installs to `/usr/local/sbin/openvpn`.
+  </Step>
+
+  <Step title="Verify installation">
+    ```bash
+    openvpn --version
+    ```
+
+    Expected output:
+
+    ```
+    OpenVPN 2.6.x x86_64-pc-linux-gnu [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [MH/PKTINFO] [AEAD]
+    library versions: OpenSSL 3.0.x, LZO 2.10
+    Originally developed by James Yonan
+    Copyright (C) 2002-2025 OpenVPN Inc <info@openvpn.net>
+    ```
+  </Step>
+</Steps>
+
+## Test the installation
+
+Verify that OpenVPN is working correctly with these basic tests:
+
+<Steps>
+  <Step title="Test crypto functionality">
+    Generate a test key and verify crypto operations:
+
+    ```bash
+    openvpn --genkey secret key
+    openvpn --test-crypto --secret key
+    ```
+
+    Expected output:
+
+    ```
+    Crypto test passed
+    ```
+  </Step>
+
+  <Step title="Test SSL/TLS negotiations (optional)">
+    Run a loopback test using sample configurations (runs for 2 minutes):
+
+    Terminal 1:
+    ```bash
+    openvpn --config sample/sample-config-files/loopback-server
+    ```
+
+    Terminal 2 (simultaneously):
+    ```bash
+    openvpn --config sample/sample-config-files/loopback-client
+    ```
+
+    <Warning>
+      This test uses insecure sample certificates and should only be used for testing.
+    </Warning>
+  </Step>
+</Steps>
+
+## Install Easy-RSA
+
+For managing SSL/TLS certificates, install the Easy-RSA toolkit:
+
+```bash
+git clone https://github.com/OpenVPN/easy-rsa
+cd easy-rsa/easyrsa3
+```
+
+Easy-RSA provides scripts for generating and managing:
+- Certificate Authority (CA)
+- Server certificates and keys
+- Client certificates and keys
+- Diffie-Hellman parameters
+
+<Tip>
+  Many package managers also provide Easy-RSA as a separate package: `apt install easy-rsa` or `brew install easy-rsa`
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start guide" icon="rocket" href="/quickstart">
+    Set up your first VPN connection
+  </Card>
+  <Card title="Configuration examples" icon="file-code">
+    Explore sample configurations for various scenarios
+  </Card>
+</CardGroup>
+
+## System requirements reference
+
+Before installation, ensure your system meets these requirements:
+
+| Component | Requirement |
+|-----------|-------------|
+| TUN/TAP driver | User-space control of virtual point-to-point IP or Ethernet device |
+| Crypto library | OpenSSL 1.1.0+ or mbed TLS 2.0+ |
+| Linux only | `libnl-gen` for kernel netlink support |
+| Linux only | `libcap-ng` for capability handling |
+| Optional | LZO library for compression |
+| Optional | LZ4 library for compression |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="TUN/TAP driver not found">
+    On Linux, load the module:
+    ```bash
+    sudo modprobe tun
+    lsmod | grep tun
+    ```
+
+    Verify the device exists:
+    ```bash
+    ls -l /dev/net/tun
+    ```
+  </Accordion>
+
+  <Accordion title="Permission denied errors">
+    OpenVPN requires root privileges to create TUN/TAP devices. Run with sudo:
+    ```bash
+    sudo openvpn --config client.conf
+    ```
+
+    For production, consider dropping privileges after initialization:
+    ```
+    user openvpn
+    group openvpn
+    ```
+  </Accordion>
+
+  <Accordion title="OpenSSL version mismatch">
+    Check your OpenSSL version:
+    ```bash
+    openssl version
+    ```
+
+    OpenVPN 2.6 requires OpenSSL 1.1.0 or higher. Upgrade if necessary:
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install libssl-dev
+
+    # RHEL/CentOS/Fedora
+    sudo dnf install openssl-devel
+    ```
+  </Accordion>
+</AccordionGroup>
