@@ -1,0 +1,154 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "OpenVPN",
+  "projectDescription": "Open source VPN daemon for secure IP tunneling over UDP/TCP with SSL/TLS encryption",
+  "theme": "aspen",
+  "primaryColor": "#0066CC",
+  "lightColor": "#4A90E2",
+  "darkColor": "#003D7A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/tunneling-modes",
+              "concepts/authentication",
+              "concepts/encryption"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/client-setup",
+              "configuration/server-setup",
+              "configuration/options-reference"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/tls-setup",
+              "security/certificates",
+              "security/key-generation",
+              "security/cipher-configuration"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/data-channel-offload",
+              "advanced/management-interface",
+              "advanced/plugins",
+              "advanced/scripting"
+            ]
+          },
+          {
+            "group": "Platform-Specific",
+            "pages": [
+              "platforms/linux",
+              "platforms/windows",
+              "platforms/macos",
+              "platforms/bsd"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/deployment",
+              "operations/monitoring",
+              "operations/troubleshooting",
+              "operations/performance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Command Line",
+            "pages": [
+              "reference/cli-overview",
+              "reference/generic-options",
+              "reference/client-options",
+              "reference/server-options"
+            ]
+          },
+          {
+            "group": "Configuration Options",
+            "pages": [
+              "reference/encryption-options",
+              "reference/network-options",
+              "reference/logging-options",
+              "reference/advanced-options"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/basic-setup",
+              "examples/site-to-site",
+              "examples/multi-client",
+              "examples/advanced-configs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Community",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "community/overview",
+              "community/contributing",
+              "community/code-style",
+              "community/support"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "SSL/TLS-based VPN with certificate authentication",
+    "UDP and TCP tunnel transport",
+    "Data channel offload (DCO) for kernel-level acceleration",
+    "Multi-socket server support",
+    "AES-GCM and ChaCha20-Poly1305 encryption",
+    "Point-to-point and client-server modes",
+    "Management interface for remote control",
+    "Plugin system for extensibility",
+    "Cross-platform support (Linux, Windows, macOS, BSD)"
+  ],
+  "publicApiSurface": [
+    "openvpn --config <file>",
+    "openvpn --remote <host> <port>",
+    "openvpn --client",
+    "openvpn --server <subnet> <netmask>",
+    "openvpn --genkey secret <file>",
+    "openvpn --management <host> <port>",
+    "openvpn --daemon",
+    "openvpn --help",
+    "openvpn --show-ciphers",
+    "openvpn --show-tls",
+    "TLS Auth/Crypt options",
+    "Certificate and key configuration",
+    "Network routing options",
+    "Compression options",
+    "Plugin hooks"
+  ]
+}
